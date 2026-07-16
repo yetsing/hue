@@ -1,9 +1,11 @@
 #[path = "ctx.rs"]
 mod ctx;
+mod textarea;
 
 use ctx::Ctx;
 use glyph_brush::ab_glyph::FontRef;
 use glyph_brush::OwnedSection;
+use wgpu::naga::front::spv::ModuleState::Name;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wgpu_text::glyph_brush::{BuiltInLineBreaker, Layout, Section, Text};
@@ -56,7 +58,7 @@ struct State<'a> {
     window: Option<Arc<Window>>,
     font: &'a [u8],
     brush: Option<TextBrush<FontRef<'a>>>,
-    random_text: String,
+    text_area: textarea::TextArea,
     font_size: f32,
     section: Option<OwnedSection>,
     caret_pipeline: Option<wgpu::RenderPipeline>,
@@ -115,61 +117,17 @@ impl State<'_> {
         estimated_width
     }
 
-    fn char_to_byte_index(s: &str, char_index: usize) -> usize {
-        if char_index == 0 {
-            return 0;
-        }
-        s.char_indices()
-            .nth(char_index)
-            .map_or(s.len(), |(byte_idx, _)| byte_idx)
-    }
-
-    fn insert_text_at_cursor(&mut self, text: &str) {
-        let byte_idx = Self::char_to_byte_index(&self.random_text, self.cursor_index_chars);
-        self.random_text.insert_str(byte_idx, text);
-        self.cursor_index_chars += text.chars().count();
-        self.cursor_blink_start = Instant::now();
-    }
-
-    fn delete_char_before_cursor(&mut self) {
-        if self.cursor_index_chars == 0 {
-            return;
-        }
-        let end = Self::char_to_byte_index(&self.random_text, self.cursor_index_chars);
-        let start = Self::char_to_byte_index(&self.random_text, self.cursor_index_chars - 1);
-        self.random_text.replace_range(start..end, "");
-        self.cursor_index_chars -= 1;
-        self.cursor_blink_start = Instant::now();
-    }
-
-    fn delete_char_after_cursor(&mut self) {
-        let len = self.random_text.chars().count();
-        if self.cursor_index_chars >= len {
-            return;
-        }
-        let start = Self::char_to_byte_index(&self.random_text, self.cursor_index_chars);
-        let end = Self::char_to_byte_index(&self.random_text, self.cursor_index_chars + 1);
-        self.random_text.replace_range(start..end, "");
-        self.cursor_blink_start = Instant::now();
-    }
-
-    fn clamp_cursor(&mut self) {
-        let len = self.random_text.chars().count();
-        if self.cursor_index_chars > len {
-            self.cursor_index_chars = len;
-        }
-    }
-
     fn build_caret_vertices(
         &self,
         cursor_x_logical: f32,
+        cursor_y_logical: f32,
         viewport_width_px: f32,
         viewport_height_px: f32,
         alpha: f32,
     ) -> [f32; CARET_VERTEX_FLOATS] {
         let scale_factor = self.window.as_ref().unwrap().scale_factor() as f32;
         let x_px = (cursor_x_logical * scale_factor).round();
-        let y_px = (self.font_size * CARET_TOP_OFFSET_RATIO * scale_factor).round();
+        let y_px = (cursor_y_logical + self.font_size * CARET_TOP_OFFSET_RATIO * scale_factor).round();
         let w_px = 2.0;
         let h_px = (self.font_size * CARET_HEIGHT_RATIO * scale_factor).max(1.0).round();
 
@@ -324,10 +282,8 @@ impl ApplicationHandler for State<'_> {
                     // 这里的 cursor_x_offset 需要根据光标在文本中的位置计算字符宽度
                     // 使用 wgpu-text 的 glyph_brush 来计算会比较精确
                     let cursor_prefix = self
-                        .random_text
-                        .chars()
-                        .take(self.cursor_index_chars)
-                        .collect::<String>();
+                        .text_area
+                        .cursor_prefix_string();
                     let cursor_x_offset = self.measure_text_width(&cursor_prefix);
                     let cursor_x_logical = screen_x + cursor_x_offset; // 假设光标在文本的第 100 个像素位置
                     let cursor_y_logical = screen_y; // 候选框通常在光标上方或下方弹出
@@ -352,7 +308,8 @@ impl ApplicationHandler for State<'_> {
                 },
                 Ime::Commit(text) => {
                     println!("Committed: {}", text);
-                    self.insert_text_at_cursor(&text);
+                    self.text_area.insert_text_at_cursor(&text);
+                    self.cursor_blink_start = Instant::now();
                 },
                 }
             }
@@ -368,30 +325,42 @@ impl ApplicationHandler for State<'_> {
                 Key::Named(k) => match k {
                     NamedKey::Escape => elwt.exit(),
                     NamedKey::Delete => {
-                        self.delete_char_after_cursor();
+                        self.text_area.delete_char_after_cursor();
+                        self.cursor_blink_start = Instant::now();
                     }
                     NamedKey::Backspace => {
-                        self.delete_char_before_cursor();
+                        self.text_area.delete_char_before_cursor();
+                        self.cursor_blink_start = Instant::now();
                     }
                     NamedKey::Space => {
-                        self.insert_text_at_cursor(" ");
+                        self.text_area.insert_text_at_cursor(" ");
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    NamedKey::Enter => {
+                        self.text_area.insert_newline_at_cursor();
+                        self.cursor_blink_start = Instant::now();
                     }
                     NamedKey::ArrowLeft => {
-                        if self.cursor_index_chars > 0 {
-                            self.cursor_index_chars -= 1;
-                            self.cursor_blink_start = Instant::now();
-                        }
+                        self.text_area.move_left_cursor();
+                        self.cursor_blink_start = Instant::now();
                     }
                     NamedKey::ArrowRight => {
-                        if self.cursor_index_chars < self.random_text.chars().count() {
-                            self.cursor_index_chars += 1;
-                            self.cursor_blink_start = Instant::now();
-                        }
+                        self.text_area.move_right_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    NamedKey::ArrowUp => {
+                        self.text_area.move_up_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    NamedKey::ArrowDown => {
+                        self.text_area.move_down_cursor();
+                        self.cursor_blink_start = Instant::now();
                     }
                     _ => (),
                 },
                 Key::Character(char) if !self.ime_active => {
-                    self.insert_text_at_cursor(char.as_str());
+                    self.text_area.insert_text_at_cursor(char.as_str());
+                    self.cursor_blink_start = Instant::now();
                 }
                 _ => (),
             },
@@ -409,13 +378,9 @@ impl ApplicationHandler for State<'_> {
                 self.font_size = (size.clamp(3.0, 300.0) * 2.0).round() / 2.0;
             }
             WindowEvent::RedrawRequested => {
-                self.clamp_cursor();
+                self.text_area.clamp_cursor();
 
-                let cursor_prefix = self
-                    .random_text
-                    .chars()
-                    .take(self.cursor_index_chars)
-                    .collect::<String>();
+                let cursor_prefix = self.text_area.cursor_prefix_string();
                 let cursor_x = self.measure_text_width(&cursor_prefix);
 
                 let elapsed_ms = self.cursor_blink_start.elapsed().as_millis();
@@ -435,21 +400,22 @@ impl ApplicationHandler for State<'_> {
                 let viewport_width = config.width as f32;
                 let viewport_height = config.height as f32;
 
+                let text = self.text_area.string();
                 let section = Section::default()
                     .add_text(
-                        Text::new(&self.random_text)
+                        Text::new(&text)
                             .with_scale(self.font_size)
                             .with_color([0.9, 0.5, 0.5, 1.0]),
                     )
                     .with_bounds((config.width as f32, config.height as f32))
                     .with_layout(
                         Layout::default()
-                            .line_breaker(BuiltInLineBreaker::AnyCharLineBreaker),
+                            .line_breaker(BuiltInLineBreaker::UnicodeLineBreaker),
                     );
                 self.section = Some(section.to_owned());
 
                 let caret_vertices =
-                    self.build_caret_vertices(cursor_x, viewport_width, viewport_height, caret_alpha);
+                    self.build_caret_vertices(cursor_x, 0.0,viewport_width, viewport_height, caret_alpha);
 
                 let brush = self.brush.as_mut().unwrap();
 
@@ -568,7 +534,7 @@ fn main() {
         window: None,
         font: include_bytes!("fonts/SarasaMonoSC-Regular.ttf"),
         brush: None,
-        random_text: "Hello, world!".to_string(),
+        text_area: textarea::TextArea::new(),
         font_size: 28.,
         section: None,
         caret_pipeline: None,
