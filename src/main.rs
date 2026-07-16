@@ -5,7 +5,6 @@ mod textarea;
 use ctx::Ctx;
 use glyph_brush::ab_glyph::FontRef;
 use glyph_brush::OwnedSection;
-use wgpu::naga::front::spv::ModuleState::Name;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wgpu_text::glyph_brush::{BuiltInLineBreaker, Layout, Section, Text};
@@ -63,7 +62,6 @@ struct State<'a> {
     section: Option<OwnedSection>,
     caret_pipeline: Option<wgpu::RenderPipeline>,
     caret_vertex_buffer: Option<wgpu::Buffer>,
-    cursor_index_chars: usize,
     cursor_blink_start: Instant,
     ime_active: bool,
 
@@ -117,6 +115,34 @@ impl State<'_> {
         estimated_width
     }
 
+    fn measure_text_height(&mut self, text: &str) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+
+        if let Some(brush) = &mut self.brush {
+            let section = Section::default()
+                .add_text(
+                    Text::new(text)
+                        .with_scale(self.font_size)
+                        .with_color([1.0, 1.0, 1.0, 1.0]),
+                )
+                .with_bounds((f32::MAX, f32::MAX))
+                .with_layout(
+                    Layout::default()
+                        .line_breaker(BuiltInLineBreaker::UnicodeLineBreaker),
+                );
+
+            if let Some(rect) = brush.glyph_bounds(section) {
+                let scale_factor = self.window.as_ref().unwrap().scale_factor() as f32;
+                return rect.height() / scale_factor;
+            }
+        }
+
+        let line_count = text.lines().count() as f32;
+        self.font_size * line_count
+    }
+
     fn build_caret_vertices(
         &self,
         cursor_x_logical: f32,
@@ -127,7 +153,8 @@ impl State<'_> {
     ) -> [f32; CARET_VERTEX_FLOATS] {
         let scale_factor = self.window.as_ref().unwrap().scale_factor() as f32;
         let x_px = (cursor_x_logical * scale_factor).round();
-        let y_px = (cursor_y_logical + self.font_size * CARET_TOP_OFFSET_RATIO * scale_factor).round();
+        let y_px =
+            ((cursor_y_logical + self.font_size * CARET_TOP_OFFSET_RATIO) * scale_factor).round();
         let w_px = 2.0;
         let h_px = (self.font_size * CARET_HEIGHT_RATIO * scale_factor).max(1.0).round();
 
@@ -146,6 +173,14 @@ impl State<'_> {
             r, b, color[0], color[1], color[2], color[3],
             l, b, color[0], color[1], color[2], color[3],
         ]
+    }
+
+    fn cursor_logical_position(&mut self) -> (f32, f32) {
+        let cursor_prefix = self.text_area.cursor_prefix_string();
+        let cursor_x = self.measure_text_width(&cursor_prefix);
+        let preceding_lines = self.text_area.lines_before_cursor_string();
+        let cursor_y = self.measure_text_height(&preceding_lines);
+        (cursor_x, cursor_y)
     }
 
 }
@@ -279,19 +314,16 @@ impl ApplicationHandler for State<'_> {
                     }
                     let font_size = self.font_size; // 当前字体大小
 
-                    // 这里的 cursor_x_offset 需要根据光标在文本中的位置计算字符宽度
-                    // 使用 wgpu-text 的 glyph_brush 来计算会比较精确
-                    let cursor_prefix = self
-                        .text_area
-                        .cursor_prefix_string();
-                    let cursor_x_offset = self.measure_text_width(&cursor_prefix);
-                    let cursor_x_logical = screen_x + cursor_x_offset; // 假设光标在文本的第 100 个像素位置
-                    let cursor_y_logical = screen_y; // 候选框通常在光标上方或下方弹出
+                    let (cursor_x, cursor_y) = self.cursor_logical_position();
+                    let cursor_x_logical = screen_x + cursor_x;
+                    let cursor_y_logical = screen_y + cursor_y;
 
                     // 转换为物理像素 (PhysicalPosition)glyph_brush
                     let scale_factor = self.window.as_ref().unwrap().scale_factor() as f32;
                     let physical_x = (cursor_x_logical * scale_factor) as i32;
-                    let physical_y = (cursor_y_logical * scale_factor) as i32;
+                    let physical_y =
+                        ((cursor_y_logical + font_size * CARET_TOP_OFFSET_RATIO) * scale_factor)
+                            as i32;
                     let physical_height = (font_size * CARET_HEIGHT_RATIO * scale_factor) as u32;
 
                     self.window.as_ref().unwrap().set_ime_cursor_area(
@@ -379,9 +411,7 @@ impl ApplicationHandler for State<'_> {
             }
             WindowEvent::RedrawRequested => {
                 self.text_area.clamp_cursor();
-
-                let cursor_prefix = self.text_area.cursor_prefix_string();
-                let cursor_x = self.measure_text_width(&cursor_prefix);
+                let (cursor_x, cursor_y) = self.cursor_logical_position();
 
                 let elapsed_ms = self.cursor_blink_start.elapsed().as_millis();
                 let caret_alpha = if elapsed_ms < CARET_BLINK_DELAY_MS {
@@ -412,10 +442,25 @@ impl ApplicationHandler for State<'_> {
                         Layout::default()
                             .line_breaker(BuiltInLineBreaker::UnicodeLineBreaker),
                     );
-                self.section = Some(section.to_owned());
+                // self.section = Some(section.to_owned());
+
+                let (cursor_row, cursor_col) = self.text_area.cursor_position();
+                let debug_text = format!("Cursor: ({}, {})", cursor_row, cursor_col);
+                let debug_section = Section::default()
+                    .add_text(
+                        Text::new(&debug_text)
+                            .with_scale(40.0)
+                            .with_color([0.2, 0.5, 0.8, 1.0]),
+                    )
+                    .with_bounds((config.width as f32, config.height as f32))
+                    .with_layout(
+                        Layout::default()
+                            .line_breaker(BuiltInLineBreaker::AnyCharLineBreaker),
+                    )
+                    .with_screen_position((config.width as f32 / 2.0, config.height as f32 * 0.2));
 
                 let caret_vertices =
-                    self.build_caret_vertices(cursor_x, 0.0,viewport_width, viewport_height, caret_alpha);
+                    self.build_caret_vertices(cursor_x, cursor_y, viewport_width, viewport_height, caret_alpha);
 
                 let brush = self.brush.as_mut().unwrap();
 
@@ -428,7 +473,7 @@ impl ApplicationHandler for State<'_> {
                 };
                 queue.write_buffer(caret_vertex_buffer, 0, caret_vertex_bytes);
 
-                match brush.queue(device, queue, [self.section.as_ref().unwrap()]) {
+                match brush.queue(device, queue, [section, debug_section]) {
                     Ok(_) => (),
                     Err(err) => {
                         panic!("{err}");
@@ -539,7 +584,6 @@ fn main() {
         section: None,
         caret_pipeline: None,
         caret_vertex_buffer: None,
-        cursor_index_chars: "Hello, world!".chars().count(),
         cursor_blink_start: Instant::now(),
         ime_active: false,
 

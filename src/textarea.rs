@@ -133,6 +133,15 @@ impl TextArea {
         }
     }
 
+    pub(crate) fn lines_before_cursor_string(&self) -> String {
+        self.lines
+            .iter()
+            .take(self.cursor_row)
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
 }
 
 // cursor movement methods
