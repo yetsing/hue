@@ -142,6 +142,15 @@ impl TextArea {
             .join("\n")
     }
 
+    pub(crate) fn trailing_empty_lines_before_cursor(&self) -> usize {
+        self.lines
+            .iter()
+            .take(self.cursor_row)
+            .rev()
+            .take_while(|line| line.text.is_empty())
+            .count()
+    }
+
 }
 
 // cursor movement methods

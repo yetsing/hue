@@ -143,6 +143,18 @@ impl State<'_> {
         self.font_size * line_count
     }
 
+    fn measure_line_advance(&mut self) -> f32 {
+        let single_line_height = self.measure_text_height("Mg");
+        let two_line_height = self.measure_text_height("Mg\nMg");
+        let line_advance = (two_line_height - single_line_height).abs();
+
+        if line_advance > 0.0 {
+            line_advance
+        } else {
+            self.font_size
+        }
+    }
+
     fn build_caret_vertices(
         &self,
         cursor_x_logical: f32,
@@ -179,7 +191,9 @@ impl State<'_> {
         let cursor_prefix = self.text_area.cursor_prefix_string();
         let cursor_x = self.measure_text_width(&cursor_prefix);
         let preceding_lines = self.text_area.lines_before_cursor_string();
-        let cursor_y = self.measure_text_height(&preceding_lines);
+        let missing_empty_lines = self.text_area.trailing_empty_lines_before_cursor();
+        let cursor_y = self.measure_text_height(&preceding_lines)
+            + missing_empty_lines as f32 * self.measure_line_advance();
         (cursor_x, cursor_y)
     }
 
