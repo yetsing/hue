@@ -3,6 +3,7 @@ mod ctx;
 mod textarea;
 
 use ctx::Ctx;
+use std::fmt;
 use glyph_brush::ab_glyph::FontRef;
 use glyph_brush::OwnedSection;
 use std::sync::Arc;
@@ -13,7 +14,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{KeyEvent, MouseScrollDelta, Ime};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::Window;
 use winit::{
     event::{ElementState, WindowEvent},
@@ -51,6 +52,26 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimMode {
+    Command,
+    CommandLine,
+    Insert,
+    Visual,
+}
+
+impl fmt::Display for VimMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            VimMode::Command => "Command",
+            VimMode::CommandLine => "CommandLine",
+            VimMode::Insert => "Insert",
+            VimMode::Visual => "Visual",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 struct State<'a> {
     // Use an `Option` to allow the window to not be available until the
     // application is properly running.
@@ -60,10 +81,14 @@ struct State<'a> {
     text_area: textarea::TextArea,
     font_size: f32,
     section: Option<OwnedSection>,
+    
     caret_pipeline: Option<wgpu::RenderPipeline>,
     caret_vertex_buffer: Option<wgpu::Buffer>,
     cursor_blink_start: Instant,
+
     ime_active: bool,
+    vim_mode: VimMode,
+    modifier: ModifiersState,
 
     target_framerate: Duration,
     delta_time: Instant,
@@ -197,6 +222,90 @@ impl State<'_> {
         (cursor_x, cursor_y)
     }
 
+    fn handle_key_in_command_mode(&mut self, key: Key) {
+        if self.vim_mode != VimMode::Command {
+            return;
+        }
+        match key {
+            Key::Character(char) if !self.ime_active => {
+                match char.as_str() {
+                    "h" => {
+                        self.text_area.move_left_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    "l" => {
+                        self.text_area.move_right_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    "j" => {
+                        self.text_area.move_down_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    "k" => {
+                        self.text_area.move_up_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    "i" => {
+                        self.vim_mode = VimMode::Insert;
+                        println!("Switched to Insert mode");
+                    }
+                    "v" => {
+                        self.vim_mode = VimMode::Visual;
+                        println!("Switched to Visual mode");
+                    }
+                    ":" => {
+                        self.vim_mode = VimMode::CommandLine;
+                        println!("Switched to Command-Line mode");
+                    }
+                    _ => {}
+                }
+            }
+            _ => {},
+        }
+    }
+
+    fn handle_key_in_insert_mode(&mut self, key: Key) {
+        if self.vim_mode != VimMode::Insert {
+            return;
+        }
+        match key {
+            Key::Named(k) => match k {
+                NamedKey::Escape => {
+                    self.vim_mode = VimMode::Command;
+                    println!("Switched to Command mode");
+                }
+                NamedKey::Delete => {
+                    self.text_area.delete_char_after_cursor();
+                    self.cursor_blink_start = Instant::now();
+                }
+                NamedKey::Backspace => {
+                    self.text_area.delete_char_before_cursor();
+                    self.cursor_blink_start = Instant::now();
+                }
+                NamedKey::Space => {
+                    self.text_area.insert_text_at_cursor(" ");
+                    self.cursor_blink_start = Instant::now();
+                }
+                NamedKey::Enter => {
+                    self.text_area.insert_newline_at_cursor();
+                    self.cursor_blink_start = Instant::now();
+                }
+                _ => (),
+            },
+            Key::Character(char) if !self.ime_active => {
+                // Handle Ctrl+[ to switch to Command mode （终端里面 Ctrl + [ 对应 Esc ）
+                if self.modifier.control_key() && char.as_str() == "[" {
+                    self.vim_mode = VimMode::Command;
+                    println!("Switched to Command mode");
+                    return;
+                }
+                self.text_area.insert_text_at_cursor(char.as_str());
+                self.cursor_blink_start = Instant::now();
+            }
+            _ => (),
+        }
+    }
+
 }
 
 impl ApplicationHandler for State<'_> {
@@ -315,6 +424,9 @@ impl ApplicationHandler for State<'_> {
                 // brush.update_matrix(wgpu_text::ortho(config.width, config.height), &queue);
             }
             WindowEvent::CloseRequested => elwt.exit(),
+            WindowEvent::ModifiersChanged(new_modifiers) => {
+                self.modifier = new_modifiers.state();
+            }
             WindowEvent::Ime(ime_event) => {
                 match ime_event {
                 Ime::Enabled =>{
@@ -354,8 +466,10 @@ impl ApplicationHandler for State<'_> {
                 },
                 Ime::Commit(text) => {
                     println!("Committed: {}", text);
-                    self.text_area.insert_text_at_cursor(&text);
-                    self.cursor_blink_start = Instant::now();
+                    if self.vim_mode == VimMode::Insert {
+                        self.text_area.insert_text_at_cursor(&text);
+                        self.cursor_blink_start = Instant::now();
+                    }
                 },
                 }
             }
@@ -367,48 +481,10 @@ impl ApplicationHandler for State<'_> {
                         ..
                     },
                 ..
-            } => match logical_key {
-                Key::Named(k) => match k {
-                    NamedKey::Escape => elwt.exit(),
-                    NamedKey::Delete => {
-                        self.text_area.delete_char_after_cursor();
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    NamedKey::Backspace => {
-                        self.text_area.delete_char_before_cursor();
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    NamedKey::Space => {
-                        self.text_area.insert_text_at_cursor(" ");
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    NamedKey::Enter => {
-                        self.text_area.insert_newline_at_cursor();
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    NamedKey::ArrowLeft => {
-                        self.text_area.move_left_cursor();
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    NamedKey::ArrowRight => {
-                        self.text_area.move_right_cursor();
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    NamedKey::ArrowUp => {
-                        self.text_area.move_up_cursor();
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    NamedKey::ArrowDown => {
-                        self.text_area.move_down_cursor();
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    _ => (),
-                },
-                Key::Character(char) if !self.ime_active => {
-                    self.text_area.insert_text_at_cursor(char.as_str());
-                    self.cursor_blink_start = Instant::now();
-                }
-                _ => (),
+            } => match self.vim_mode {
+                VimMode::Command => self.handle_key_in_command_mode(logical_key),
+                VimMode::Insert => self.handle_key_in_insert_mode(logical_key),
+                _ => {}
             },
             WindowEvent::MouseWheel {
                 delta: MouseScrollDelta::LineDelta(_, y),
@@ -428,7 +504,7 @@ impl ApplicationHandler for State<'_> {
                 let (cursor_x, cursor_y) = self.cursor_logical_position();
 
                 let elapsed_ms = self.cursor_blink_start.elapsed().as_millis();
-                let caret_alpha = if elapsed_ms < CARET_BLINK_DELAY_MS {
+                let caret_alpha = if elapsed_ms < CARET_BLINK_DELAY_MS || self.vim_mode != VimMode::Insert {
                     1.0
                 } else {
                     let blink_on =
@@ -565,7 +641,8 @@ impl ApplicationHandler for State<'_> {
             self.fps += 1;
             if self.fps_update_time.elapsed().as_millis() > 1000 {
                 window.set_title(&format!(
-                    "wgpu-text: 'performance' example, FPS: {}",
+                    "hue: '{}', FPS: {}",
+                    self.vim_mode,
                     self.fps
                 ));
                 self.fps = 0;
@@ -596,10 +673,14 @@ fn main() {
         text_area: textarea::TextArea::new(),
         font_size: 28.,
         section: None,
+
         caret_pipeline: None,
         caret_vertex_buffer: None,
         cursor_blink_start: Instant::now(),
+        
         ime_active: false,
+        vim_mode: VimMode::Command,
+        modifier: ModifiersState::empty(),
 
         // FPS and window updating:
         // change '60.0' if you want different FPS cap
