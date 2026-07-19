@@ -345,7 +345,7 @@ impl State<'_> {
         // self.section = Some(section.to_owned());
 
         let (cursor_row, cursor_col) = self.text_area.cursor_position();
-        let debug_text = format!("Cursor: ({}, {})", cursor_row, cursor_col);
+        let debug_text = format!("Cursor: ({}, {}), Mode: {}", cursor_row, cursor_col, self.vim_state.mode);
         let debug_section = Section::default()
             .add_text(
                 Text::new(&debug_text)
@@ -354,7 +354,7 @@ impl State<'_> {
             )
             .with_bounds((config.width as f32, config.height as f32))
             .with_layout(Layout::default().line_breaker(BuiltInLineBreaker::AnyCharLineBreaker))
-            .with_screen_position((config.width as f32 / 2.0, config.height as f32 * 0.2));
+            .with_screen_position((0.0, config.height as f32 * 0.94));
 
         let caret_vertices = self.build_caret_vertices(
             cursor_x,
@@ -646,8 +646,8 @@ impl ApplicationHandler for State<'_> {
             self.fps += 1;
             if self.fps_update_time.elapsed().as_millis() > 1000 {
                 window.set_title(&format!(
-                    "hue: '{}', FPS: {}",
-                    self.vim_state.mode, self.fps
+                    "hue FPS: {}",
+                    self.fps
                 ));
                 self.fps = 0;
                 self.fps_update_time = Instant::now();

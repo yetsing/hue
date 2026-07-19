@@ -36,6 +36,7 @@ pub(crate) struct TextArea {
     lines: Vec<Line>,
     cursor_row: usize,
     cursor_col: usize,
+    preferred_col: usize, // Preferred column position when moving up/down
 }
 
 impl TextArea {
@@ -44,6 +45,7 @@ impl TextArea {
             lines: vec![Line::new(String::new())],
             cursor_row: 0,
             cursor_col: 0,
+            preferred_col: 0,
         }
     }
 
@@ -51,6 +53,7 @@ impl TextArea {
         if let Some(line) = self.lines.get_mut(self.cursor_row) {
             line.insert_text(text, self.cursor_col);
             self.cursor_col += text.chars().count();
+            self.preferred_col = self.cursor_col; // Update preferred column after insertion
         }
     }
 
@@ -63,6 +66,7 @@ impl TextArea {
                 .insert(self.cursor_row + 1, Line::new(remaining_text));
             self.cursor_row += 1;
             self.cursor_col = 0;
+            self.preferred_col = 0;
         }
     }
 
@@ -76,6 +80,7 @@ impl TextArea {
             let current_line = self.lines.remove(self.cursor_row);
             if let Some(prev_line) = self.lines.get_mut(self.cursor_row - 1) {
                 self.cursor_col = prev_line.length();
+                self.preferred_col = self.cursor_col; // Update preferred column after merging
                 prev_line.text.push_str(&current_line.text);
                 self.cursor_row -= 1;
             }
@@ -85,6 +90,7 @@ impl TextArea {
         if let Some(line) = self.lines.get_mut(self.cursor_row) {
             line.delete_text(self.cursor_col - 1, 1);
             self.cursor_col -= 1;
+            self.preferred_col = self.cursor_col; // Update preferred column after deletion
         }
     }
 
@@ -114,7 +120,8 @@ impl TextArea {
             if self.cursor_row >= self.lines.len() && self.cursor_row > 0 {
                 self.cursor_row -= 1;
             }
-            self.cursor_col = usize::min(self.cursor_col, self.lines[self.cursor_row].length());
+            self.cursor_col = usize::min(self.cursor_col, self.lines[self.cursor_row].length().saturating_sub(1));
+            self.preferred_col = self.cursor_col; // Update preferred column after deletion
         }
     }
 
@@ -171,20 +178,16 @@ impl TextArea {
     pub(crate) fn move_left_cursor(&mut self) {
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
-        } else if self.cursor_row > 0 {
-            self.cursor_row -= 1;
-            self.cursor_col = self.lines[self.cursor_row].length();
+            self.preferred_col = self.cursor_col; // Update preferred column when moving left
         }
     }
 
     pub(crate) fn move_right_cursor(&mut self) {
         if self.cursor_row < self.lines.len() {
             let line_len = self.lines[self.cursor_row].length();
-            if self.cursor_col < line_len {
+            if line_len > 1 && self.cursor_col < line_len - 1 {
                 self.cursor_col += 1;
-            } else if self.cursor_row + 1 < self.lines.len() {
-                self.cursor_row += 1;
-                self.cursor_col = 0;
+                self.preferred_col = self.cursor_col; // Update preferred column when moving right
             }
         }
     }
@@ -192,14 +195,24 @@ impl TextArea {
     pub(crate) fn move_up_cursor(&mut self) {
         if self.cursor_row > 0 {
             self.cursor_row -= 1;
-            self.cursor_col = usize::min(self.cursor_col, self.lines[self.cursor_row].length());
+            let line_len = self.lines[self.cursor_row].length();
+            if line_len < 2 {
+                self.cursor_col = 0;
+            } else {
+                self.cursor_col = usize::min(self.preferred_col, line_len - 1);
+            }
         }
     }
 
     pub(crate) fn move_down_cursor(&mut self) {
         if self.cursor_row + 1 < self.lines.len() {
             self.cursor_row += 1;
-            self.cursor_col = usize::min(self.cursor_col, self.lines[self.cursor_row].length());
+            let line_len = self.lines[self.cursor_row].length();
+            if line_len < 2 {
+                self.cursor_col = 0;
+            } else {
+                self.cursor_col = usize::min(self.preferred_col, line_len - 1);
+            }
         }
     }
 }
