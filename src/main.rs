@@ -1,13 +1,13 @@
 #[path = "ctx.rs"]
 mod ctx;
-mod textarea;
 mod fileexplorer;
+mod textarea;
 
 use ctx::Ctx;
 use glyph_brush::OwnedSection;
 use glyph_brush::ab_glyph::FontRef;
-use std::path::PathBuf;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wgpu_text::glyph_brush::{BuiltInLineBreaker, Layout, Section, Text};
@@ -101,7 +101,7 @@ struct State<'a> {
     vim_state: VimState,
     modifier: ModifiersState,
 
-    currend_dir: PathBuf,
+    current_dir: PathBuf,
     fileinfos: Vec<fileexplorer::FileInfo>,
 
     target_framerate: Duration,
@@ -115,7 +115,7 @@ struct State<'a> {
 
 impl State<'_> {
     fn update_fileinfos(&mut self) {
-        match fileexplorer::list_directory(self.currend_dir.to_str().unwrap()) {
+        match fileexplorer::list_directory(self.current_dir.to_str().unwrap()) {
             Ok(files) => {
                 self.fileinfos = files;
             }
@@ -125,10 +125,17 @@ impl State<'_> {
             }
         };
 
+        self.text_area = textarea::TextArea::new();
         self.text_area.insert_text_at_cursor("d .");
         self.text_area.append_line("d ..");
         for file in &self.fileinfos {
-            self.text_area.append_line(&format!("{} {:<20} {:>10} {}", if file.is_dir { "d" } else { "-" }, file.name, file.size, file.format_modified_time()));
+            self.text_area.append_line(&format!(
+                "{} {:<20} {:>10} {}",
+                if file.is_dir { "d" } else { "-" },
+                file.name,
+                file.size,
+                file.format_modified_time()
+            ));
         }
         self.text_area.goto_cursor(2, 0);
     }
@@ -260,6 +267,45 @@ impl State<'_> {
             return;
         }
         match key {
+            Key::Named(k) => match k {
+                NamedKey::Enter => {
+                    let (cursor_row, _) = self.text_area.cursor_position();
+                    if cursor_row == 0 {
+                        // Handle "d ." (current directory) no action needed
+                    } else if cursor_row == 1 {
+                        // Handle "d .." (parent directory)
+                        if let Some(parent) = self.current_dir.parent() {
+                            self.current_dir = parent.to_path_buf();
+                            self.update_fileinfos();
+                        }
+                    } else {
+                        if let Some(selected_file) = self.fileinfos.get(cursor_row - 2) {
+                            if selected_file.is_dir {
+                                self.current_dir.push(&selected_file.name);
+                                self.update_fileinfos();
+                            } else {
+                                println!("Selected file: {}", selected_file.name);
+                                // Read the file content and write it to the text area
+                                let file_path = self.current_dir.join(&selected_file.name);
+                                match std::fs::read_to_string(&file_path) {
+                                    Ok(content) => {
+                                        self.vim_state.mode = VimMode::Command;
+                                        self.text_area = textarea::TextArea::from_string(&content);
+                                    }
+                                    Err(err) => {
+                                        eprintln!(
+                                            "Error reading file {}: {}",
+                                            file_path.display(),
+                                            err
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
             Key::Character(char) if !self.ime_active => match char.as_str() {
                 "h" => {
                     self.text_area.move_left_cursor();
@@ -349,7 +395,7 @@ impl State<'_> {
                     self.text_area.insert_newline_at_cursor();
                     self.cursor_blink_start = Instant::now();
                 }
-                _ => (),
+                _ => {}
             },
             Key::Character(char) if !self.ime_active => {
                 // Handle Ctrl+[ to switch to Command mode （终端里面 Ctrl + [ 对应 Esc ）
@@ -399,7 +445,10 @@ impl State<'_> {
         // self.section = Some(section.to_owned());
 
         let (cursor_row, cursor_col) = self.text_area.cursor_position();
-        let debug_text = format!("Cursor: ({}, {}), Mode: {}", cursor_row, cursor_col, self.vim_state.mode);
+        let debug_text = format!(
+            "Cursor: ({}, {}), Mode: {}",
+            cursor_row, cursor_col, self.vim_state.mode
+        );
         let debug_section = Section::default()
             .add_text(
                 Text::new(&debug_text)
@@ -700,10 +749,7 @@ impl ApplicationHandler for State<'_> {
             self.delta_time = Instant::now();
             self.fps += 1;
             if self.fps_update_time.elapsed().as_millis() > 1000 {
-                window.set_title(&format!(
-                    "hue FPS: {}",
-                    self.fps
-                ));
+                window.set_title(&format!("hue FPS: {}", self.fps));
                 self.fps = 0;
                 self.fps_update_time = Instant::now();
             }
@@ -743,7 +789,7 @@ fn main() {
         vim_state: VimState::default(),
         modifier: ModifiersState::empty(),
 
-        currend_dir: cwd,
+        current_dir: cwd,
         fileinfos: Vec::new(),
 
         // FPS and window updating:

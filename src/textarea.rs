@@ -130,7 +130,10 @@ impl TextArea {
             if self.cursor_row >= self.lines.len() && self.cursor_row > 0 {
                 self.cursor_row -= 1;
             }
-            self.cursor_col = usize::min(self.cursor_col, self.lines[self.cursor_row].length().saturating_sub(1));
+            self.cursor_col = usize::min(
+                self.cursor_col,
+                self.lines[self.cursor_row].length().saturating_sub(1),
+            );
             self.preferred_col = self.cursor_col; // Update preferred column after deletion
         }
     }
