@@ -49,6 +49,16 @@ impl TextArea {
         }
     }
 
+    pub(crate) fn from_string(s: &str) -> Self {
+        let lines = s.lines().map(|line| Line::new(line.to_string())).collect();
+        TextArea {
+            lines,
+            cursor_row: 0,
+            cursor_col: 0,
+            preferred_col: 0,
+        }
+    }
+
     pub(crate) fn insert_text_at_cursor(&mut self, text: &str) {
         if let Some(line) = self.lines.get_mut(self.cursor_row) {
             line.insert_text(text, self.cursor_col);
@@ -123,6 +133,10 @@ impl TextArea {
             self.cursor_col = usize::min(self.cursor_col, self.lines[self.cursor_row].length().saturating_sub(1));
             self.preferred_col = self.cursor_col; // Update preferred column after deletion
         }
+    }
+
+    pub(crate) fn append_line(&mut self, text: &str) {
+        self.lines.push(Line::new(text.to_string()));
     }
 
     pub(crate) fn string(&self) -> String {
@@ -212,6 +226,28 @@ impl TextArea {
                 self.cursor_col = 0;
             } else {
                 self.cursor_col = usize::min(self.preferred_col, line_len - 1);
+            }
+        }
+    }
+
+    pub(crate) fn goto_cursor(&mut self, row: usize, col: usize) {
+        self.cursor_row = usize::min(row, self.lines.len().saturating_sub(1));
+        let line_len = self.lines[self.cursor_row].length();
+        self.cursor_col = usize::min(col, line_len.saturating_sub(1));
+        self.preferred_col = self.cursor_col; // Update preferred column when going to a specific position
+    }
+
+    pub(crate) fn start_of_line_cursor(&mut self) {
+        self.cursor_col = 0;
+        self.preferred_col = self.cursor_col; // Update preferred column when moving to start of line
+    }
+
+    pub(crate) fn end_of_line_cursor(&mut self) {
+        if self.cursor_row < self.lines.len() {
+            let line_len = self.lines[self.cursor_row].length();
+            if line_len > 0 {
+                self.cursor_col = line_len - 1;
+                self.preferred_col = self.cursor_col; // Update preferred column when moving to end of line
             }
         }
     }

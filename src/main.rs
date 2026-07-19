@@ -1,10 +1,12 @@
 #[path = "ctx.rs"]
 mod ctx;
 mod textarea;
+mod fileexplorer;
 
 use ctx::Ctx;
 use glyph_brush::OwnedSection;
 use glyph_brush::ab_glyph::FontRef;
+use std::path::PathBuf;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -55,6 +57,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum VimMode {
     #[default]
+    Directory,
     Command,
     CommandLine,
     Insert,
@@ -64,6 +67,7 @@ enum VimMode {
 impl fmt::Display for VimMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
+            VimMode::Directory => "Directory",
             VimMode::Command => "Command",
             VimMode::CommandLine => "CommandLine",
             VimMode::Insert => "Insert",
@@ -97,6 +101,9 @@ struct State<'a> {
     vim_state: VimState,
     modifier: ModifiersState,
 
+    currend_dir: PathBuf,
+    fileinfos: Vec<fileexplorer::FileInfo>,
+
     target_framerate: Duration,
     delta_time: Instant,
     fps_update_time: Instant,
@@ -107,6 +114,25 @@ struct State<'a> {
 }
 
 impl State<'_> {
+    fn update_fileinfos(&mut self) {
+        match fileexplorer::list_directory(self.currend_dir.to_str().unwrap()) {
+            Ok(files) => {
+                self.fileinfos = files;
+            }
+            Err(err) => {
+                eprintln!("Error listing directory: {}", err);
+                self.fileinfos.clear();
+            }
+        };
+
+        self.text_area.insert_text_at_cursor("d .");
+        self.text_area.append_line("d ..");
+        for file in &self.fileinfos {
+            self.text_area.append_line(&format!("{} {:<20} {:>10} {}", if file.is_dir { "d" } else { "-" }, file.name, file.size, file.format_modified_time()));
+        }
+        self.text_area.goto_cursor(2, 0);
+    }
+
     /// 测量文本宽度，返回逻辑像素
     fn measure_text_width(&mut self, text: &str) -> f32 {
         if text.is_empty() {
@@ -227,6 +253,34 @@ impl State<'_> {
         let cursor_y = self.measure_text_height(&preceding_lines)
             + missing_empty_lines as f32 * self.measure_line_advance();
         (cursor_x, cursor_y)
+    }
+
+    fn handle_key_in_directory_mode(&mut self, key: Key) {
+        if self.vim_state.mode != VimMode::Directory {
+            return;
+        }
+        match key {
+            Key::Character(char) if !self.ime_active => match char.as_str() {
+                "h" => {
+                    self.text_area.move_left_cursor();
+                    self.cursor_blink_start = Instant::now();
+                }
+                "l" => {
+                    self.text_area.move_right_cursor();
+                    self.cursor_blink_start = Instant::now();
+                }
+                "j" => {
+                    self.text_area.move_down_cursor();
+                    self.cursor_blink_start = Instant::now();
+                }
+                "k" => {
+                    self.text_area.move_up_cursor();
+                    self.cursor_blink_start = Instant::now();
+                }
+                _ => {}
+            },
+            _ => {}
+        }
     }
 
     fn handle_key_in_command_mode(&mut self, key: Key) {
@@ -613,6 +667,7 @@ impl ApplicationHandler for State<'_> {
                     },
                 ..
             } => match self.vim_state.mode {
+                VimMode::Directory => self.handle_key_in_directory_mode(logical_key),
                 VimMode::Command => self.handle_key_in_command_mode(logical_key),
                 VimMode::Insert => self.handle_key_in_insert_mode(logical_key),
                 _ => {}
@@ -670,6 +725,8 @@ fn main() {
     let event_loop = event_loop::EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
 
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
     let mut state = State {
         window: None,
         font: include_bytes!("fonts/SarasaMonoSC-Regular.ttf"),
@@ -686,6 +743,9 @@ fn main() {
         vim_state: VimState::default(),
         modifier: ModifiersState::empty(),
 
+        currend_dir: cwd,
+        fileinfos: Vec::new(),
+
         // FPS and window updating:
         // change '60.0' if you want different FPS cap
         target_framerate: Duration::from_secs_f64(1.0 / 60.0),
@@ -695,6 +755,8 @@ fn main() {
 
         ctx: None,
     };
+
+    state.update_fileinfos();
 
     let _ = event_loop.run_app(&mut state);
 }
