@@ -52,8 +52,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 enum VimMode {
+    #[default]
     Command,
     CommandLine,
     Insert,
@@ -72,6 +73,12 @@ impl fmt::Display for VimMode {
     }
 }
 
+#[derive(Default)]
+struct VimState {
+    mode: VimMode,
+    cmd: String,
+}
+
 struct State<'a> {
     // Use an `Option` to allow the window to not be available until the
     // application is properly running.
@@ -87,7 +94,7 @@ struct State<'a> {
     cursor_blink_start: Instant,
 
     ime_active: bool,
-    vim_mode: VimMode,
+    vim_state: VimState,
     modifier: ModifiersState,
 
     target_framerate: Duration,
@@ -223,7 +230,7 @@ impl State<'_> {
     }
 
     fn handle_key_in_command_mode(&mut self, key: Key) {
-        if self.vim_mode != VimMode::Command {
+        if self.vim_state.mode != VimMode::Command {
             return;
         }
         match key {
@@ -246,15 +253,15 @@ impl State<'_> {
                         self.cursor_blink_start = Instant::now();
                     }
                     "i" => {
-                        self.vim_mode = VimMode::Insert;
+                        self.vim_state.mode = VimMode::Insert;
                         println!("Switched to Insert mode");
                     }
                     "v" => {
-                        self.vim_mode = VimMode::Visual;
+                        self.vim_state.mode = VimMode::Visual;
                         println!("Switched to Visual mode");
                     }
                     ":" => {
-                        self.vim_mode = VimMode::CommandLine;
+                        self.vim_state.mode = VimMode::CommandLine;
                         println!("Switched to Command-Line mode");
                     }
                     _ => {}
@@ -265,13 +272,13 @@ impl State<'_> {
     }
 
     fn handle_key_in_insert_mode(&mut self, key: Key) {
-        if self.vim_mode != VimMode::Insert {
+        if self.vim_state.mode != VimMode::Insert {
             return;
         }
         match key {
             Key::Named(k) => match k {
                 NamedKey::Escape => {
-                    self.vim_mode = VimMode::Command;
+                    self.vim_state.mode = VimMode::Command;
                     println!("Switched to Command mode");
                 }
                 NamedKey::Delete => {
@@ -295,7 +302,7 @@ impl State<'_> {
             Key::Character(char) if !self.ime_active => {
                 // Handle Ctrl+[ to switch to Command mode （终端里面 Ctrl + [ 对应 Esc ）
                 if self.modifier.control_key() && char.as_str() == "[" {
-                    self.vim_mode = VimMode::Command;
+                    self.vim_state.mode = VimMode::Command;
                     println!("Switched to Command mode");
                     return;
                 }
@@ -304,6 +311,136 @@ impl State<'_> {
             }
             _ => (),
         }
+    }
+
+    fn redraw(&mut self) {
+        self.text_area.clamp_cursor();
+        let (cursor_x, cursor_y) = self.cursor_logical_position();
+
+        let elapsed_ms = self.cursor_blink_start.elapsed().as_millis();
+        let caret_alpha = if elapsed_ms < CARET_BLINK_DELAY_MS || self.vim_state.mode != VimMode::Insert {
+            1.0
+        } else {
+            let blink_on =
+                ((elapsed_ms - CARET_BLINK_DELAY_MS) / CARET_BLINK_PERIOD_MS) % 2 == 0;
+            if blink_on { 1.0 } else { 0.0 }
+        };
+
+        let ctx = self.ctx.as_ref().unwrap();
+        let queue = &ctx.queue;
+        let device = &ctx.device;
+        let config = &ctx.config;
+        let surface = &ctx.surface;
+        let viewport_width = config.width as f32;
+        let viewport_height = config.height as f32;
+
+        let text = self.text_area.string();
+        let section = Section::default()
+            .add_text(
+                Text::new(&text)
+                    .with_scale(self.font_size)
+                    .with_color([0.9, 0.5, 0.5, 1.0]),
+            )
+            .with_bounds((config.width as f32, config.height as f32))
+            .with_layout(
+                Layout::default()
+                    .line_breaker(BuiltInLineBreaker::UnicodeLineBreaker),
+            );
+        // self.section = Some(section.to_owned());
+
+        let (cursor_row, cursor_col) = self.text_area.cursor_position();
+        let debug_text = format!("Cursor: ({}, {})", cursor_row, cursor_col);
+        let debug_section = Section::default()
+            .add_text(
+                Text::new(&debug_text)
+                    .with_scale(40.0)
+                    .with_color([0.2, 0.5, 0.8, 1.0]),
+            )
+            .with_bounds((config.width as f32, config.height as f32))
+            .with_layout(
+                Layout::default()
+                    .line_breaker(BuiltInLineBreaker::AnyCharLineBreaker),
+            )
+            .with_screen_position((config.width as f32 / 2.0, config.height as f32 * 0.2));
+
+        let caret_vertices =
+            self.build_caret_vertices(cursor_x, cursor_y, viewport_width, viewport_height, caret_alpha);
+
+        let brush = self.brush.as_mut().unwrap();
+
+        let caret_vertex_buffer = self.caret_vertex_buffer.as_ref().unwrap();
+        let caret_vertex_bytes = unsafe {
+            std::slice::from_raw_parts(
+                caret_vertices.as_ptr() as *const u8,
+                std::mem::size_of_val(&caret_vertices),
+            )
+        };
+        queue.write_buffer(caret_vertex_buffer, 0, caret_vertex_bytes);
+
+        match brush.queue(device, queue, [section, debug_section]) {
+            Ok(_) => (),
+            Err(err) => {
+                panic!("{err}");
+            }
+        };
+
+        let frame = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Occluded => return,
+            _ => {
+                surface.configure(device, config);
+                match surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(s) => s,
+                    e => {
+                        panic!("Failed to acquire next surface texture: {:?}", e)
+                    }
+                }
+            }
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder =
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Command Encoder"),
+            });
+
+        {
+            let mut rpass =
+                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Render Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.2,
+                                g: 0.2,
+                                b: 0.3,
+                                a: 1.,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+
+            brush.draw(&mut rpass);
+
+            if caret_alpha > 0.0 {
+                rpass.set_pipeline(self.caret_pipeline.as_ref().unwrap());
+                rpass.set_vertex_buffer(0, caret_vertex_buffer.slice(..));
+                rpass.draw(0..6, 0..1);
+            }
+        }
+
+        queue.submit([encoder.finish()]);
+        queue.present(frame);
     }
 
 }
@@ -466,7 +603,7 @@ impl ApplicationHandler for State<'_> {
                 },
                 Ime::Commit(text) => {
                     println!("Committed: {}", text);
-                    if self.vim_mode == VimMode::Insert {
+                    if self.vim_state.mode == VimMode::Insert {
                         self.text_area.insert_text_at_cursor(&text);
                         self.cursor_blink_start = Instant::now();
                     }
@@ -481,7 +618,7 @@ impl ApplicationHandler for State<'_> {
                         ..
                     },
                 ..
-            } => match self.vim_mode {
+            } => match self.vim_state.mode {
                 VimMode::Command => self.handle_key_in_command_mode(logical_key),
                 VimMode::Insert => self.handle_key_in_insert_mode(logical_key),
                 _ => {}
@@ -500,133 +637,7 @@ impl ApplicationHandler for State<'_> {
                 self.font_size = (size.clamp(3.0, 300.0) * 2.0).round() / 2.0;
             }
             WindowEvent::RedrawRequested => {
-                self.text_area.clamp_cursor();
-                let (cursor_x, cursor_y) = self.cursor_logical_position();
-
-                let elapsed_ms = self.cursor_blink_start.elapsed().as_millis();
-                let caret_alpha = if elapsed_ms < CARET_BLINK_DELAY_MS || self.vim_mode != VimMode::Insert {
-                    1.0
-                } else {
-                    let blink_on =
-                        ((elapsed_ms - CARET_BLINK_DELAY_MS) / CARET_BLINK_PERIOD_MS) % 2 == 0;
-                    if blink_on { 1.0 } else { 0.0 }
-                };
-
-                let ctx = self.ctx.as_ref().unwrap();
-                let queue = &ctx.queue;
-                let device = &ctx.device;
-                let config = &ctx.config;
-                let surface = &ctx.surface;
-                let viewport_width = config.width as f32;
-                let viewport_height = config.height as f32;
-
-                let text = self.text_area.string();
-                let section = Section::default()
-                    .add_text(
-                        Text::new(&text)
-                            .with_scale(self.font_size)
-                            .with_color([0.9, 0.5, 0.5, 1.0]),
-                    )
-                    .with_bounds((config.width as f32, config.height as f32))
-                    .with_layout(
-                        Layout::default()
-                            .line_breaker(BuiltInLineBreaker::UnicodeLineBreaker),
-                    );
-                // self.section = Some(section.to_owned());
-
-                let (cursor_row, cursor_col) = self.text_area.cursor_position();
-                let debug_text = format!("Cursor: ({}, {})", cursor_row, cursor_col);
-                let debug_section = Section::default()
-                    .add_text(
-                        Text::new(&debug_text)
-                            .with_scale(40.0)
-                            .with_color([0.2, 0.5, 0.8, 1.0]),
-                    )
-                    .with_bounds((config.width as f32, config.height as f32))
-                    .with_layout(
-                        Layout::default()
-                            .line_breaker(BuiltInLineBreaker::AnyCharLineBreaker),
-                    )
-                    .with_screen_position((config.width as f32 / 2.0, config.height as f32 * 0.2));
-
-                let caret_vertices =
-                    self.build_caret_vertices(cursor_x, cursor_y, viewport_width, viewport_height, caret_alpha);
-
-                let brush = self.brush.as_mut().unwrap();
-
-                let caret_vertex_buffer = self.caret_vertex_buffer.as_ref().unwrap();
-                let caret_vertex_bytes = unsafe {
-                    std::slice::from_raw_parts(
-                        caret_vertices.as_ptr() as *const u8,
-                        std::mem::size_of_val(&caret_vertices),
-                    )
-                };
-                queue.write_buffer(caret_vertex_buffer, 0, caret_vertex_bytes);
-
-                match brush.queue(device, queue, [section, debug_section]) {
-                    Ok(_) => (),
-                    Err(err) => {
-                        panic!("{err}");
-                    }
-                };
-
-                let frame = match surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(frame) => frame,
-                    wgpu::CurrentSurfaceTexture::Occluded => return,
-                    _ => {
-                        surface.configure(device, config);
-                        match surface.get_current_texture() {
-                            wgpu::CurrentSurfaceTexture::Success(s) => s,
-                            e => {
-                                panic!("Failed to acquire next surface texture: {:?}", e)
-                            }
-                        }
-                    }
-                };
-                let view = frame
-                    .texture
-                    .create_view(&wgpu::TextureViewDescriptor::default());
-
-                let mut encoder =
-                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Command Encoder"),
-                    });
-
-                {
-                    let mut rpass =
-                        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Render Pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &view,
-                                depth_slice: None,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                                        r: 0.2,
-                                        g: 0.2,
-                                        b: 0.3,
-                                        a: 1.,
-                                    }),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
-
-                    brush.draw(&mut rpass);
-
-                    if caret_alpha > 0.0 {
-                        rpass.set_pipeline(self.caret_pipeline.as_ref().unwrap());
-                        rpass.set_vertex_buffer(0, caret_vertex_buffer.slice(..));
-                        rpass.draw(0..6, 0..1);
-                    }
-                }
-
-                queue.submit([encoder.finish()]);
-                queue.present(frame);
+                self.redraw();
             }
             _ => (),
         }
@@ -642,7 +653,7 @@ impl ApplicationHandler for State<'_> {
             if self.fps_update_time.elapsed().as_millis() > 1000 {
                 window.set_title(&format!(
                     "hue: '{}', FPS: {}",
-                    self.vim_mode,
+                    self.vim_state.mode,
                     self.fps
                 ));
                 self.fps = 0;
@@ -679,7 +690,7 @@ fn main() {
         cursor_blink_start: Instant::now(),
         
         ime_active: false,
-        vim_mode: VimMode::Command,
+        vim_state: VimState::default(),
         modifier: ModifiersState::empty(),
 
         // FPS and window updating:
