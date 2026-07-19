@@ -1,4 +1,3 @@
-
 fn char_to_byte_index(s: &str, char_index: usize) -> usize {
     if char_index == 0 {
         return 0;
@@ -7,7 +6,6 @@ fn char_to_byte_index(s: &str, char_index: usize) -> usize {
         .nth(char_index)
         .map_or(s.len(), |(byte_idx, _)| byte_idx)
 }
-
 
 struct Line {
     text: String,
@@ -58,8 +56,11 @@ impl TextArea {
 
     pub(crate) fn insert_newline_at_cursor(&mut self) {
         if let Some(line) = self.lines.get_mut(self.cursor_row) {
-            let remaining_text = line.text.split_off(char_to_byte_index(&line.text, self.cursor_col));
-            self.lines.insert(self.cursor_row + 1, Line::new(remaining_text));
+            let remaining_text = line
+                .text
+                .split_off(char_to_byte_index(&line.text, self.cursor_col));
+            self.lines
+                .insert(self.cursor_row + 1, Line::new(remaining_text));
             self.cursor_row += 1;
             self.cursor_col = 0;
         }
@@ -150,7 +151,6 @@ impl TextArea {
             .take_while(|line| line.text.is_empty())
             .count()
     }
-
 }
 
 // cursor movement methods

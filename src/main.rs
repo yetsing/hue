@@ -3,16 +3,16 @@ mod ctx;
 mod textarea;
 
 use ctx::Ctx;
-use std::fmt;
-use glyph_brush::ab_glyph::FontRef;
 use glyph_brush::OwnedSection;
+use glyph_brush::ab_glyph::FontRef;
+use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use wgpu_text::glyph_brush::{BuiltInLineBreaker, Layout, Section, Text};
 use wgpu_text::{BrushBuilder, TextBrush};
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{KeyEvent, MouseScrollDelta, Ime};
+use winit::event::{Ime, KeyEvent, MouseScrollDelta};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::Window;
@@ -88,7 +88,7 @@ struct State<'a> {
     text_area: textarea::TextArea,
     font_size: f32,
     section: Option<OwnedSection>,
-    
+
     caret_pipeline: Option<wgpu::RenderPipeline>,
     caret_vertex_buffer: Option<wgpu::Buffer>,
     cursor_blink_start: Instant,
@@ -112,7 +112,7 @@ impl State<'_> {
         if text.is_empty() {
             return 0.0;
         }
-        
+
         // 从 Option 中获取 brush 的可变引用
         if let Some(brush) = &mut self.brush {
             // 构建用于测量的 Section
@@ -123,7 +123,7 @@ impl State<'_> {
                         .with_color([1.0, 1.0, 1.0, 1.0]),
                 )
                 .with_bounds((f32::MAX, f32::MAX)); // 不限制宽度，让文本自然展开
-            
+
             // 调用 glyph_bounds 获取边界框
             if let Some(rect) = brush.glyph_bounds(section) {
                 let scale_factor = self.window.as_ref().unwrap().scale_factor() as f32;
@@ -131,10 +131,11 @@ impl State<'_> {
                 return rect.width() / scale_factor;
             }
         }
-        
+
         // 降级方案：如果测量失败，使用粗略估算
         // 中文字符宽度约为字体大小，英文字符约为字体大小的 60%
-        let estimated_width = text.chars()
+        let estimated_width = text
+            .chars()
             .map(|c| {
                 if c.is_ascii() {
                     self.font_size * 0.6
@@ -143,7 +144,7 @@ impl State<'_> {
                 }
             })
             .sum::<f32>();
-        
+
         estimated_width
     }
 
@@ -161,8 +162,7 @@ impl State<'_> {
                 )
                 .with_bounds((f32::MAX, f32::MAX))
                 .with_layout(
-                    Layout::default()
-                        .line_breaker(BuiltInLineBreaker::UnicodeLineBreaker),
+                    Layout::default().line_breaker(BuiltInLineBreaker::UnicodeLineBreaker),
                 );
 
             if let Some(rect) = brush.glyph_bounds(section) {
@@ -200,7 +200,9 @@ impl State<'_> {
         let y_px =
             ((cursor_y_logical + self.font_size * CARET_TOP_OFFSET_RATIO) * scale_factor).round();
         let w_px = 2.0;
-        let h_px = (self.font_size * CARET_HEIGHT_RATIO * scale_factor).max(1.0).round();
+        let h_px = (self.font_size * CARET_HEIGHT_RATIO * scale_factor)
+            .max(1.0)
+            .round();
 
         let l = (x_px / viewport_width_px) * 2.0 - 1.0;
         let r = ((x_px + w_px) / viewport_width_px) * 2.0 - 1.0;
@@ -210,12 +212,10 @@ impl State<'_> {
         let color = [0.95_f32, 0.95_f32, 0.95_f32, alpha];
 
         [
-            l, t, color[0], color[1], color[2], color[3],
-            r, t, color[0], color[1], color[2], color[3],
-            l, b, color[0], color[1], color[2], color[3],
-            r, t, color[0], color[1], color[2], color[3],
-            r, b, color[0], color[1], color[2], color[3],
-            l, b, color[0], color[1], color[2], color[3],
+            l, t, color[0], color[1], color[2], color[3], r, t, color[0], color[1], color[2],
+            color[3], l, b, color[0], color[1], color[2], color[3], r, t, color[0], color[1],
+            color[2], color[3], r, b, color[0], color[1], color[2], color[3], l, b, color[0],
+            color[1], color[2], color[3],
         ]
     }
 
@@ -234,40 +234,38 @@ impl State<'_> {
             return;
         }
         match key {
-            Key::Character(char) if !self.ime_active => {
-                match char.as_str() {
-                    "h" => {
-                        self.text_area.move_left_cursor();
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    "l" => {
-                        self.text_area.move_right_cursor();
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    "j" => {
-                        self.text_area.move_down_cursor();
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    "k" => {
-                        self.text_area.move_up_cursor();
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    "i" => {
-                        self.vim_state.mode = VimMode::Insert;
-                        println!("Switched to Insert mode");
-                    }
-                    "v" => {
-                        self.vim_state.mode = VimMode::Visual;
-                        println!("Switched to Visual mode");
-                    }
-                    ":" => {
-                        self.vim_state.mode = VimMode::CommandLine;
-                        println!("Switched to Command-Line mode");
-                    }
-                    _ => {}
+            Key::Character(char) if !self.ime_active => match char.as_str() {
+                "h" => {
+                    self.text_area.move_left_cursor();
+                    self.cursor_blink_start = Instant::now();
                 }
-            }
-            _ => {},
+                "l" => {
+                    self.text_area.move_right_cursor();
+                    self.cursor_blink_start = Instant::now();
+                }
+                "j" => {
+                    self.text_area.move_down_cursor();
+                    self.cursor_blink_start = Instant::now();
+                }
+                "k" => {
+                    self.text_area.move_up_cursor();
+                    self.cursor_blink_start = Instant::now();
+                }
+                "i" => {
+                    self.vim_state.mode = VimMode::Insert;
+                    println!("Switched to Insert mode");
+                }
+                "v" => {
+                    self.vim_state.mode = VimMode::Visual;
+                    println!("Switched to Visual mode");
+                }
+                ":" => {
+                    self.vim_state.mode = VimMode::CommandLine;
+                    println!("Switched to Command-Line mode");
+                }
+                _ => {}
+            },
+            _ => {}
         }
     }
 
@@ -318,11 +316,12 @@ impl State<'_> {
         let (cursor_x, cursor_y) = self.cursor_logical_position();
 
         let elapsed_ms = self.cursor_blink_start.elapsed().as_millis();
-        let caret_alpha = if elapsed_ms < CARET_BLINK_DELAY_MS || self.vim_state.mode != VimMode::Insert {
+        let caret_alpha = if elapsed_ms < CARET_BLINK_DELAY_MS
+            || self.vim_state.mode != VimMode::Insert
+        {
             1.0
         } else {
-            let blink_on =
-                ((elapsed_ms - CARET_BLINK_DELAY_MS) / CARET_BLINK_PERIOD_MS) % 2 == 0;
+            let blink_on = ((elapsed_ms - CARET_BLINK_DELAY_MS) / CARET_BLINK_PERIOD_MS) % 2 == 0;
             if blink_on { 1.0 } else { 0.0 }
         };
 
@@ -342,10 +341,7 @@ impl State<'_> {
                     .with_color([0.9, 0.5, 0.5, 1.0]),
             )
             .with_bounds((config.width as f32, config.height as f32))
-            .with_layout(
-                Layout::default()
-                    .line_breaker(BuiltInLineBreaker::UnicodeLineBreaker),
-            );
+            .with_layout(Layout::default().line_breaker(BuiltInLineBreaker::UnicodeLineBreaker));
         // self.section = Some(section.to_owned());
 
         let (cursor_row, cursor_col) = self.text_area.cursor_position();
@@ -357,14 +353,16 @@ impl State<'_> {
                     .with_color([0.2, 0.5, 0.8, 1.0]),
             )
             .with_bounds((config.width as f32, config.height as f32))
-            .with_layout(
-                Layout::default()
-                    .line_breaker(BuiltInLineBreaker::AnyCharLineBreaker),
-            )
+            .with_layout(Layout::default().line_breaker(BuiltInLineBreaker::AnyCharLineBreaker))
             .with_screen_position((config.width as f32 / 2.0, config.height as f32 * 0.2));
 
-        let caret_vertices =
-            self.build_caret_vertices(cursor_x, cursor_y, viewport_width, viewport_height, caret_alpha);
+        let caret_vertices = self.build_caret_vertices(
+            cursor_x,
+            cursor_y,
+            viewport_width,
+            viewport_height,
+            caret_alpha,
+        );
 
         let brush = self.brush.as_mut().unwrap();
 
@@ -401,34 +399,32 @@ impl State<'_> {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Command Encoder"),
-            });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Command Encoder"),
+        });
 
         {
-            let mut rpass =
-                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Render Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.2,
-                                g: 0.2,
-                                b: 0.3,
-                                a: 1.,
-                            }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.2,
+                            g: 0.2,
+                            b: 0.3,
+                            a: 1.,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
 
             brush.draw(&mut rpass);
 
@@ -442,7 +438,6 @@ impl State<'_> {
         queue.submit([encoder.finish()]);
         queue.present(frame);
     }
-
 }
 
 impl ApplicationHandler for State<'_> {
@@ -450,8 +445,7 @@ impl ApplicationHandler for State<'_> {
         let window = Arc::new(
             event_loop
                 .create_window(
-                    Window::default_attributes()
-                        .with_title("wgpu-text: 'simple' example"),
+                    Window::default_attributes().with_title("wgpu-text: 'simple' example"),
                 )
                 .unwrap(),
         );
@@ -566,48 +560,48 @@ impl ApplicationHandler for State<'_> {
             }
             WindowEvent::Ime(ime_event) => {
                 match ime_event {
-                Ime::Enabled =>{
-                    self.ime_active = true;
-                    println!("IME enabled for Window={window_id:?}");
-                    let mut screen_x = 0.0 as f32;
-                    let mut screen_y = 0.0 as f32;
-                    if let Some(section) = &self.section {
-                        screen_x = section.screen_position.0; // Section 左上角 X 坐标 (逻辑像素)
-                        screen_y = section.screen_position.1; // Section 左上角 Y 坐标 (逻辑像素)
+                    Ime::Enabled => {
+                        self.ime_active = true;
+                        println!("IME enabled for Window={window_id:?}");
+                        let mut screen_x = 0.0 as f32;
+                        let mut screen_y = 0.0 as f32;
+                        if let Some(section) = &self.section {
+                            screen_x = section.screen_position.0; // Section 左上角 X 坐标 (逻辑像素)
+                            screen_y = section.screen_position.1; // Section 左上角 Y 坐标 (逻辑像素)
+                        }
+                        let font_size = self.font_size; // 当前字体大小
+
+                        let (cursor_x, cursor_y) = self.cursor_logical_position();
+                        let cursor_x_logical = screen_x + cursor_x;
+                        let cursor_y_logical = screen_y + cursor_y;
+
+                        // 转换为物理像素 (PhysicalPosition)glyph_brush
+                        let scale_factor = self.window.as_ref().unwrap().scale_factor() as f32;
+                        let physical_x = (cursor_x_logical * scale_factor) as i32;
+                        let physical_y = ((cursor_y_logical + font_size * CARET_TOP_OFFSET_RATIO)
+                            * scale_factor) as i32;
+                        let physical_height =
+                            (font_size * CARET_HEIGHT_RATIO * scale_factor) as u32;
+
+                        self.window.as_ref().unwrap().set_ime_cursor_area(
+                            PhysicalPosition::new(physical_x, physical_y),
+                            PhysicalSize::new(2, physical_height), // 宽度为2像素的光标竖线
+                        );
                     }
-                    let font_size = self.font_size; // 当前字体大小
-
-                    let (cursor_x, cursor_y) = self.cursor_logical_position();
-                    let cursor_x_logical = screen_x + cursor_x;
-                    let cursor_y_logical = screen_y + cursor_y;
-
-                    // 转换为物理像素 (PhysicalPosition)glyph_brush
-                    let scale_factor = self.window.as_ref().unwrap().scale_factor() as f32;
-                    let physical_x = (cursor_x_logical * scale_factor) as i32;
-                    let physical_y =
-                        ((cursor_y_logical + font_size * CARET_TOP_OFFSET_RATIO) * scale_factor)
-                            as i32;
-                    let physical_height = (font_size * CARET_HEIGHT_RATIO * scale_factor) as u32;
-
-                    self.window.as_ref().unwrap().set_ime_cursor_area(
-                        PhysicalPosition::new(physical_x, physical_y),
-                        PhysicalSize::new(2, physical_height) // 宽度为2像素的光标竖线
-                    );
-                },
-                Ime::Disabled => {
-                    self.ime_active = false;
-                    println!("IME disabled for Window={window_id:?}");
-                },
-                Ime::Preedit(text, caret_pos) => {
-                    println!("Preedit: {}, with caret at {:?}", text, caret_pos);
-                },
-                Ime::Commit(text) => {
-                    println!("Committed: {}", text);
-                    if self.vim_state.mode == VimMode::Insert {
-                        self.text_area.insert_text_at_cursor(&text);
-                        self.cursor_blink_start = Instant::now();
+                    Ime::Disabled => {
+                        self.ime_active = false;
+                        println!("IME disabled for Window={window_id:?}");
                     }
-                },
+                    Ime::Preedit(text, caret_pos) => {
+                        println!("Preedit: {}, with caret at {:?}", text, caret_pos);
+                    }
+                    Ime::Commit(text) => {
+                        println!("Committed: {}", text);
+                        if self.vim_state.mode == VimMode::Insert {
+                            self.text_area.insert_text_at_cursor(&text);
+                            self.cursor_blink_start = Instant::now();
+                        }
+                    }
                 }
             }
             WindowEvent::KeyboardInput {
@@ -653,8 +647,7 @@ impl ApplicationHandler for State<'_> {
             if self.fps_update_time.elapsed().as_millis() > 1000 {
                 window.set_title(&format!(
                     "hue: '{}', FPS: {}",
-                    self.vim_state.mode,
-                    self.fps
+                    self.vim_state.mode, self.fps
                 ));
                 self.fps = 0;
                 self.fps_update_time = Instant::now();
@@ -688,7 +681,7 @@ fn main() {
         caret_pipeline: None,
         caret_vertex_buffer: None,
         cursor_blink_start: Instant::now(),
-        
+
         ime_active: false,
         vim_state: VimState::default(),
         modifier: ModifiersState::empty(),
