@@ -37,6 +37,7 @@ pub(crate) struct TextArea {
     cursor_row: usize,
     cursor_col: usize,
     preferred_col: usize, // Preferred column position when moving up/down
+    frozen_pos: (usize, usize),
 }
 
 impl TextArea {
@@ -46,16 +47,34 @@ impl TextArea {
             cursor_row: 0,
             cursor_col: 0,
             preferred_col: 0,
+            frozen_pos: (0, 0),
         }
     }
 
     pub(crate) fn from_string(s: &str) -> Self {
-        let lines = s.lines().map(|line| Line::new(line.to_string())).collect();
+        let mut lines: Vec<Line> = s.lines().map(|line| Line::new(line.to_string())).collect();
+        if lines.is_empty() {
+            lines.push(Line::new(String::new()));
+        }
         TextArea {
             lines,
             cursor_row: 0,
             cursor_col: 0,
             preferred_col: 0,
+            frozen_pos: (0, 0),
+        }
+    }
+
+    pub(crate) fn from_prompt(s: &str) -> Self {
+        let lines: Vec<Line> = s.lines().map(|line| Line::new(line.to_string())).collect();
+        let row = lines.len() - 1;
+        let col = lines.last().map_or(0, |line| line.length());
+        TextArea {
+            lines,
+            cursor_row: row,
+            cursor_col: col,
+            preferred_col: col,
+            frozen_pos: (row, col),
         }
     }
 
@@ -81,7 +100,7 @@ impl TextArea {
     }
 
     pub(crate) fn delete_char_before_cursor(&mut self) {
-        if self.cursor_col == 0 && self.cursor_row == 0 {
+        if (self.cursor_row, self.cursor_col) <= self.frozen_pos {
             return;
         }
 
@@ -175,6 +194,10 @@ impl TextArea {
             .take_while(|line| line.text.is_empty())
             .count()
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.lines.len() == 1 && self.lines[0].length() == 0
+    }
 }
 
 // cursor movement methods
@@ -193,7 +216,7 @@ impl TextArea {
     }
 
     pub(crate) fn move_left_cursor(&mut self) {
-        if self.cursor_col > 0 {
+        if self.cursor_col > self.frozen_pos.1 {
             self.cursor_col -= 1;
             self.preferred_col = self.cursor_col; // Update preferred column when moving left
         }
@@ -210,7 +233,7 @@ impl TextArea {
     }
 
     pub(crate) fn move_up_cursor(&mut self) {
-        if self.cursor_row > 0 {
+        if self.cursor_row > self.frozen_pos.0 {
             self.cursor_row -= 1;
             let line_len = self.lines[self.cursor_row].length();
             if line_len < 2 {

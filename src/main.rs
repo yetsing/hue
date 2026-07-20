@@ -7,6 +7,8 @@ use ctx::Ctx;
 use glyph_brush::OwnedSection;
 use glyph_brush::ab_glyph::FontRef;
 use std::fmt;
+use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,7 +18,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{Ime, KeyEvent, MouseScrollDelta};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{self, Key, ModifiersState, NamedKey};
 use winit::window::Window;
 use winit::{
     event::{ElementState, WindowEvent},
@@ -93,6 +95,10 @@ struct State<'a> {
     font_size: f32,
     section: Option<OwnedSection>,
 
+    text_input: Option<textarea::TextArea>,
+    text_input_height_ratio: f32,
+    text_input_prompt: String,
+
     caret_pipeline: Option<wgpu::RenderPipeline>,
     caret_vertex_buffer: Option<wgpu::Buffer>,
     cursor_blink_start: Instant,
@@ -103,11 +109,17 @@ struct State<'a> {
 
     current_dir: PathBuf,
     fileinfos: Vec<fileexplorer::FileInfo>,
+    filepath: PathBuf,
+    file_select_offset: usize,
 
     target_framerate: Duration,
     delta_time: Instant,
     fps_update_time: Instant,
     fps: i32,
+    scale_factor: f32,
+
+    // 是否关闭窗口
+    closed: bool,
 
     // wgpu
     ctx: Option<Ctx>,
@@ -125,7 +137,12 @@ impl State<'_> {
             }
         };
 
-        self.text_area = textarea::TextArea::new();
+        self.file_select_offset = 5;
+        let prompt = format!(
+            "\" =========================================\n\" 目录: {}\n说明: d 表示目录 - 表示文件\n\" 帮助: hjkl:光标移动 n:新建文件\n\" =========================================\n\n",
+            self.current_dir.to_str().unwrap()
+        );
+        self.text_area = textarea::TextArea::from_prompt(&prompt);
         self.text_area.insert_text_at_cursor("d .");
         self.text_area.append_line("d ..");
         for file in &self.fileinfos {
@@ -137,7 +154,7 @@ impl State<'_> {
                 file.format_modified_time()
             ));
         }
-        self.text_area.goto_cursor(2, 0);
+        self.text_area.goto_cursor(self.file_select_offset, 0);
     }
 
     /// 测量文本宽度，返回逻辑像素
@@ -159,9 +176,8 @@ impl State<'_> {
 
             // 调用 glyph_bounds 获取边界框
             if let Some(rect) = brush.glyph_bounds(section) {
-                let scale_factor = self.window.as_ref().unwrap().scale_factor() as f32;
                 // glyph_bounds 返回物理像素，需要除以 scale_factor 转为逻辑像素
-                return rect.width() / scale_factor;
+                return rect.width() / self.scale_factor;
             }
         }
 
@@ -199,8 +215,7 @@ impl State<'_> {
                 );
 
             if let Some(rect) = brush.glyph_bounds(section) {
-                let scale_factor = self.window.as_ref().unwrap().scale_factor() as f32;
-                return rect.height() / scale_factor;
+                return rect.height() / self.scale_factor;
             }
         }
 
@@ -228,7 +243,7 @@ impl State<'_> {
         viewport_height_px: f32,
         alpha: f32,
     ) -> [f32; CARET_VERTEX_FLOATS] {
-        let scale_factor = self.window.as_ref().unwrap().scale_factor() as f32;
+        let scale_factor = self.scale_factor;
         let x_px = (cursor_x_logical * scale_factor).round();
         let y_px =
             ((cursor_y_logical + self.font_size * CARET_TOP_OFFSET_RATIO) * scale_factor).round();
@@ -252,14 +267,48 @@ impl State<'_> {
         ]
     }
 
+    /// 获取文本区域的光标逻辑位置（逻辑像素），这个位置是相对于文本区域的左上角的，而不是屏幕/应用的左上角
     fn cursor_logical_position(&mut self) -> (f32, f32) {
-        let cursor_prefix = self.text_area.cursor_prefix_string();
+        // 第一步：仅从 text_input/text_area 中提取纯数据（String/usize）
+        //         match 产生的 &self 借用在此语句结束时立即释放
+        let (cursor_prefix, preceding_lines, missing_empty_lines) = match self.text_input.as_ref() {
+            Some(text_input) => (
+                text_input.cursor_prefix_string(),
+                text_input.lines_before_cursor_string(),
+                text_input.trailing_empty_lines_before_cursor(),
+            ),
+            None => (
+                self.text_area.cursor_prefix_string(),
+                self.text_area.lines_before_cursor_string(),
+                self.text_area.trailing_empty_lines_before_cursor(),
+            ),
+        };
+
+        // 第二步：此时 self 上没有任何活跃借用，可以自由调用 &mut self 方法
         let cursor_x = self.measure_text_width(&cursor_prefix);
-        let preceding_lines = self.text_area.lines_before_cursor_string();
-        let missing_empty_lines = self.text_area.trailing_empty_lines_before_cursor();
         let cursor_y = self.measure_text_height(&preceding_lines)
             + missing_empty_lines as f32 * self.measure_line_advance();
+
         (cursor_x, cursor_y)
+    }
+
+    fn save_file(&self) -> bool {
+        match File::create(&self.filepath) {
+            Ok(mut file) => {
+                let content = self.text_area.string();
+                match file.write_all(content.as_bytes()) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        eprintln!("Write file error: {}", e);
+                        false
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Open file error: {}", e);
+                false
+            }
+        }
     }
 
     fn handle_key_in_directory_mode(&mut self, key: Key) {
@@ -267,64 +316,106 @@ impl State<'_> {
             return;
         }
         match key {
-            Key::Named(k) => match k {
-                NamedKey::Enter => {
-                    let (cursor_row, _) = self.text_area.cursor_position();
-                    if cursor_row == 0 {
-                        // Handle "d ." (current directory) no action needed
-                    } else if cursor_row == 1 {
-                        // Handle "d .." (parent directory)
-                        if let Some(parent) = self.current_dir.parent() {
-                            self.current_dir = parent.to_path_buf();
-                            self.update_fileinfos();
+            Key::Named(k) => match self.text_input.as_mut() {
+                Some(text_input) => match k {
+                    NamedKey::Enter => {
+                        let input_text = text_input.string();
+                        let filename = &input_text[self.text_input_prompt.len()..];
+                        let filepath = self.current_dir.join(filename);
+                        match File::create_new(&filepath) {
+                            Ok(_) => {
+                                self.text_input = None;
+                                self.vim_state.mode = VimMode::Command;
+                                self.text_area = textarea::TextArea::new();
+                                self.filepath = filepath;
+                            }
+                            Err(e) => {
+                                eprintln!("Create new file error: {}", e);
+                            }
                         }
-                    } else {
-                        if let Some(selected_file) = self.fileinfos.get(cursor_row - 2) {
-                            if selected_file.is_dir {
-                                self.current_dir.push(&selected_file.name);
+                    }
+                    NamedKey::Escape => {
+                        self.text_input = None;
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    NamedKey::Backspace => {
+                        text_input.delete_char_before_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    _ => {}
+                },
+                None => match k {
+                    NamedKey::Enter => {
+                        let (cursor_row, _) = self.text_area.cursor_position();
+                        if cursor_row == self.file_select_offset {
+                            // Handle "d ." (current directory) no action needed
+                        } else if cursor_row == self.file_select_offset + 1 {
+                            // Handle "d .." (parent directory)
+                            if let Some(parent) = self.current_dir.parent() {
+                                self.current_dir = parent.to_path_buf();
                                 self.update_fileinfos();
-                            } else {
-                                println!("Selected file: {}", selected_file.name);
-                                // Read the file content and write it to the text area
-                                let file_path = self.current_dir.join(&selected_file.name);
-                                match std::fs::read_to_string(&file_path) {
-                                    Ok(content) => {
-                                        self.vim_state.mode = VimMode::Command;
-                                        self.text_area = textarea::TextArea::from_string(&content);
-                                    }
-                                    Err(err) => {
-                                        eprintln!(
-                                            "Error reading file {}: {}",
-                                            file_path.display(),
-                                            err
-                                        );
+                            }
+                        } else {
+                            if let Some(selected_file) =
+                                self.fileinfos.get(cursor_row - self.file_select_offset - 2)
+                            {
+                                if selected_file.is_dir {
+                                    self.current_dir.push(&selected_file.name);
+                                    self.update_fileinfos();
+                                } else {
+                                    println!("Selected file: {}", selected_file.name);
+                                    // Read the file content and write it to the text area
+                                    let file_path = self.current_dir.join(&selected_file.name);
+                                    match std::fs::read_to_string(&file_path) {
+                                        Ok(content) => {
+                                            self.vim_state.mode = VimMode::Command;
+                                            self.text_area =
+                                                textarea::TextArea::from_string(&content);
+                                            self.filepath = file_path;
+                                        }
+                                        Err(err) => {
+                                            eprintln!(
+                                                "Error reading file {}: {}",
+                                                file_path.display(),
+                                                err
+                                            );
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                _ => {}
+                    _ => {}
+                },
             },
-            Key::Character(char) if !self.ime_active => match char.as_str() {
-                "h" => {
-                    self.text_area.move_left_cursor();
-                    self.cursor_blink_start = Instant::now();
-                }
-                "l" => {
-                    self.text_area.move_right_cursor();
-                    self.cursor_blink_start = Instant::now();
-                }
-                "j" => {
-                    self.text_area.move_down_cursor();
-                    self.cursor_blink_start = Instant::now();
-                }
-                "k" => {
-                    self.text_area.move_up_cursor();
-                    self.cursor_blink_start = Instant::now();
-                }
-                _ => {}
+            Key::Character(char) if !self.ime_active => match self.text_input.as_mut() {
+                Some(text_input) => text_input.insert_text_at_cursor(char.as_str()),
+                None => match char.as_str() {
+                    "h" => {
+                        self.text_area.move_left_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    "l" => {
+                        self.text_area.move_right_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    "j" => {
+                        self.text_area.move_down_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    "k" => {
+                        self.text_area.move_up_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    "n" => {
+                        self.text_input =
+                            Some(textarea::TextArea::from_prompt(&self.text_input_prompt));
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    _ => {}
+                },
             },
+
             _ => {}
         }
     }
@@ -361,12 +452,64 @@ impl State<'_> {
                 }
                 ":" => {
                     self.vim_state.mode = VimMode::CommandLine;
+                    self.text_input = Some(textarea::TextArea::new());
+                    if let Some(text_input) = self.text_input.as_mut() {
+                        text_input.insert_text_at_cursor(":");
+                    }
                     println!("Switched to Command-Line mode");
                 }
                 _ => {}
             },
             _ => {}
         }
+    }
+
+    fn handle_key_in_command_line_mode(&mut self, key: Key) {
+        if self.vim_state.mode != VimMode::CommandLine {
+            return;
+        }
+        let text_input = self.text_input.as_mut().unwrap();
+        match key {
+            Key::Named(k) => match k {
+                NamedKey::Enter => {
+                    let input_text = text_input.string();
+                    let cmd = &input_text[1..]; // 移除前面的冒号
+                    match cmd {
+                        "w" => {
+                            self.save_file();
+                        }
+                        "q" => {
+                            self.closed = true;
+                        }
+                        "wq" => {
+                            if self.save_file() {
+                                self.closed = true;
+                            }
+                        }
+                        _ => {}
+                    };
+                    self.text_input = None;
+                    self.vim_state.mode = VimMode::Command;
+                }
+                NamedKey::Escape => {
+                    self.text_input = None;
+                    self.cursor_blink_start = Instant::now();
+                }
+                NamedKey::Backspace => {
+                    text_input.delete_char_before_cursor();
+                    self.cursor_blink_start = Instant::now();
+                    if text_input.is_empty() {
+                        self.text_input = None;
+                        self.vim_state.mode = VimMode::Command;
+                    }
+                }
+                _ => {}
+            },
+            Key::Character(char) => {
+                text_input.insert_text_at_cursor(char.as_str());
+            }
+            _ => {}
+        };
     }
 
     fn handle_key_in_insert_mode(&mut self, key: Key) {
@@ -411,6 +554,12 @@ impl State<'_> {
         }
     }
 
+    fn handle_key_in_visual_mode(&mut self, key: Key) {
+        if self.vim_state.mode != VimMode::Visual {
+            return;
+        }
+    }
+
     fn redraw(&mut self) {
         self.text_area.clamp_cursor();
         let (cursor_x, cursor_y) = self.cursor_logical_position();
@@ -444,10 +593,18 @@ impl State<'_> {
             .with_layout(Layout::default().line_breaker(BuiltInLineBreaker::UnicodeLineBreaker));
         // self.section = Some(section.to_owned());
 
+        let mut section_x = section.screen_position.0; // Section 左上角 X 坐标 (逻辑像素)
+        let mut section_y = section.screen_position.1; // Section 左上角 Y 坐标 (逻辑像素)
+
         let (cursor_row, cursor_col) = self.text_area.cursor_position();
+        let name = self
+            .filepath
+            .file_name()
+            .and_then(|os| os.to_str())
+            .unwrap_or("Untitled");
         let debug_text = format!(
-            "Cursor: ({}, {}), Mode: {}",
-            cursor_row, cursor_col, self.vim_state.mode
+            "{} Cursor: ({}, {}), Mode: {}, {} {}",
+            name, cursor_row, cursor_col, self.vim_state.mode, cursor_x, cursor_y
         );
         let debug_section = Section::default()
             .add_text(
@@ -459,9 +616,36 @@ impl State<'_> {
             .with_layout(Layout::default().line_breaker(BuiltInLineBreaker::AnyCharLineBreaker))
             .with_screen_position((0.0, config.height as f32 * 0.94));
 
+        let input_text = self
+            .text_input
+            .as_ref()
+            .map(|text_input| text_input.string());
+        let input_section = match input_text.as_ref() {
+            Some(input_text) => {
+                let input_section = Section::default()
+                    .add_text(
+                        Text::new(input_text)
+                            .with_scale(self.font_size)
+                            .with_color([0.5, 0.9, 0.5, 1.0]),
+                    )
+                    .with_bounds((config.width as f32, config.height as f32))
+                    .with_layout(
+                        Layout::default().line_breaker(BuiltInLineBreaker::UnicodeLineBreaker),
+                    )
+                    .with_screen_position((
+                        0.0,
+                        config.height as f32 * self.text_input_height_ratio,
+                    ));
+                section_x = input_section.screen_position.0;
+                section_y = input_section.screen_position.1;
+                Some(input_section)
+            }
+            None => None,
+        };
+
         let caret_vertices = self.build_caret_vertices(
-            cursor_x,
-            cursor_y,
+            cursor_x + section_x / self.scale_factor,
+            cursor_y + section_y / self.scale_factor,
             viewport_width,
             viewport_height,
             caret_alpha,
@@ -478,12 +662,21 @@ impl State<'_> {
         };
         queue.write_buffer(caret_vertex_buffer, 0, caret_vertex_bytes);
 
-        match brush.queue(device, queue, [section, debug_section]) {
-            Ok(_) => (),
-            Err(err) => {
-                panic!("{err}");
-            }
-        };
+        if let Some(input_section) = input_section {
+            match brush.queue(device, queue, [section, debug_section, input_section]) {
+                Ok(_) => (),
+                Err(err) => {
+                    panic!("{err}");
+                }
+            };
+        } else {
+            match brush.queue(device, queue, [section, debug_section]) {
+                Ok(_) => (),
+                Err(err) => {
+                    panic!("{err}");
+                }
+            };
+        }
 
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
@@ -556,6 +749,7 @@ impl ApplicationHandler for State<'_> {
         window.set_ime_allowed(true);
 
         self.ctx = Some(Ctx::new(window.clone()));
+        self.scale_factor = window.scale_factor() as f32;
 
         let ctx = self.ctx.as_ref().unwrap();
         let device = &ctx.device;
@@ -679,7 +873,7 @@ impl ApplicationHandler for State<'_> {
                         let cursor_y_logical = screen_y + cursor_y;
 
                         // 转换为物理像素 (PhysicalPosition)glyph_brush
-                        let scale_factor = self.window.as_ref().unwrap().scale_factor() as f32;
+                        let scale_factor = self.scale_factor;
                         let physical_x = (cursor_x_logical * scale_factor) as i32;
                         let physical_y = ((cursor_y_logical + font_size * CARET_TOP_OFFSET_RATIO)
                             * scale_factor) as i32;
@@ -718,8 +912,9 @@ impl ApplicationHandler for State<'_> {
             } => match self.vim_state.mode {
                 VimMode::Directory => self.handle_key_in_directory_mode(logical_key),
                 VimMode::Command => self.handle_key_in_command_mode(logical_key),
+                VimMode::CommandLine => self.handle_key_in_command_line_mode(logical_key),
                 VimMode::Insert => self.handle_key_in_insert_mode(logical_key),
-                _ => {}
+                VimMode::Visual => self.handle_key_in_visual_mode(logical_key),
             },
             WindowEvent::MouseWheel {
                 delta: MouseScrollDelta::LineDelta(_, y),
@@ -738,6 +933,10 @@ impl ApplicationHandler for State<'_> {
                 self.redraw();
             }
             _ => (),
+        };
+
+        if self.closed {
+            elwt.exit();
         }
     }
 
@@ -781,6 +980,10 @@ fn main() {
         font_size: 28.,
         section: None,
 
+        text_input: None,
+        text_input_height_ratio: 0.9,
+        text_input_prompt: "Enter new filename: ".to_string(),
+
         caret_pipeline: None,
         caret_vertex_buffer: None,
         cursor_blink_start: Instant::now(),
@@ -791,6 +994,8 @@ fn main() {
 
         current_dir: cwd,
         fileinfos: Vec::new(),
+        filepath: PathBuf::new(),
+        file_select_offset: 0,
 
         // FPS and window updating:
         // change '60.0' if you want different FPS cap
@@ -798,6 +1003,9 @@ fn main() {
         delta_time: Instant::now(),
         fps_update_time: Instant::now(),
         fps: 0,
+        scale_factor: 1.0,
+
+        closed: false,
 
         ctx: None,
     };
