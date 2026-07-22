@@ -3,10 +3,10 @@ mod ctx;
 mod fileexplorer;
 mod textarea;
 
+use core::panic;
 use ctx::Ctx;
 use glyph_brush::OwnedSection;
 use glyph_brush::ab_glyph::FontRef;
-use core::panic;
 use std::fmt;
 use std::fs::File;
 use std::io::Write;
@@ -83,7 +83,6 @@ impl fmt::Display for VimMode {
 #[derive(Default)]
 struct VimState {
     mode: VimMode,
-    cmd: String,
 }
 
 struct State<'a> {
@@ -95,6 +94,9 @@ struct State<'a> {
     text_area: textarea::TextArea,
     font_size: f32,
     section: Option<OwnedSection>,
+
+    scroll_row: usize,
+    view_rows: usize,
 
     text_input: Option<textarea::TextArea>,
     text_input_height_ratio: f32,
@@ -119,7 +121,7 @@ struct State<'a> {
     fps: i32,
     scale_factor: f32,
 
-    // 是否关闭窗口
+    // 是否关闭窗口，用来给命令行模式的 `:q` 命令使用
     closed: bool,
 
     // wgpu
@@ -129,7 +131,10 @@ struct State<'a> {
 impl State<'_> {
     fn initialize(&mut self) {
         if self.text_input_height_ratio <= 0.0 || self.text_input_height_ratio >= 1.0 {
-            panic!("Invalid text_input_height_ratio: {}. It must be between 0.0 and 1.0 (exclusive).", self.text_input_height_ratio);
+            panic!(
+                "Invalid text_input_height_ratio: {}. It must be between 0.0 and 1.0 (exclusive).",
+                self.text_input_height_ratio
+            );
         }
         self.update_fileinfos();
     }
@@ -166,7 +171,7 @@ impl State<'_> {
     }
 
     /// 测量文本宽度，返回逻辑像素
-    fn measure_text_width(&mut self, text: &str) -> f32 {
+    fn measure_text_width1(&mut self, text: &str, font_size: f32) -> f32 {
         if text.is_empty() {
             return 0.0;
         }
@@ -177,7 +182,7 @@ impl State<'_> {
             let section = Section::default()
                 .add_text(
                     Text::new(text)
-                        .with_scale(self.font_size)
+                        .with_scale(font_size)
                         .with_color([1.0, 1.0, 1.0, 1.0]),
                 )
                 .with_bounds((f32::MAX, f32::MAX)); // 不限制宽度，让文本自然展开
@@ -195,9 +200,9 @@ impl State<'_> {
             .chars()
             .map(|c| {
                 if c.is_ascii() {
-                    self.font_size * 0.6
+                    font_size * 0.6
                 } else {
-                    self.font_size // 中文字符通常占满
+                    font_size // 中文字符通常占满
                 }
             })
             .sum::<f32>();
@@ -205,7 +210,7 @@ impl State<'_> {
         estimated_width
     }
 
-    fn measure_text_height(&mut self, text: &str) -> f32 {
+    fn measure_text_height1(&mut self, text: &str, font_size: f32) -> f32 {
         if text.is_empty() {
             return 0.0;
         }
@@ -214,7 +219,7 @@ impl State<'_> {
             let section = Section::default()
                 .add_text(
                     Text::new(text)
-                        .with_scale(self.font_size)
+                        .with_scale(font_size)
                         .with_color([1.0, 1.0, 1.0, 1.0]),
                 )
                 .with_bounds((f32::MAX, f32::MAX))
@@ -228,7 +233,15 @@ impl State<'_> {
         }
 
         let line_count = text.lines().count() as f32;
-        self.font_size * line_count
+        font_size * line_count
+    }
+
+    fn measure_text_width(&mut self, text: &str) -> f32 {
+        self.measure_text_width1(text, self.font_size)
+    }
+
+    fn measure_text_height(&mut self, text: &str) -> f32 {
+        self.measure_text_height1(text, self.font_size)
     }
 
     fn measure_line_advance(&mut self) -> f32 {
@@ -287,7 +300,7 @@ impl State<'_> {
             ),
             None => (
                 self.text_area.cursor_prefix_string(),
-                self.text_area.lines_before_cursor_string(),
+                self.text_area.lines_before_cursor_string1(self.scroll_row),
                 self.text_area.trailing_empty_lines_before_cursor(),
             ),
         };
@@ -445,10 +458,23 @@ impl State<'_> {
                 "j" => {
                     self.text_area.move_down_cursor();
                     self.cursor_blink_start = Instant::now();
+                    let (cursor_row, _) = self.text_area.cursor_position();
+                    if self.view_rows > 0
+                        && cursor_row.saturating_sub(self.scroll_row) + 2 >= self.view_rows
+                    {
+                        self.scroll_row = cursor_row + 2 - self.view_rows + 1;
+                        if let Some(window) = self.window.clone().as_mut() {
+                            window.request_redraw();
+                        }
+                    }
                 }
                 "k" => {
                     self.text_area.move_up_cursor();
                     self.cursor_blink_start = Instant::now();
+                    let (cursor_row, _) = self.text_area.cursor_position();
+                    if self.scroll_row > 0 && cursor_row < self.scroll_row {
+                        self.scroll_row -= 1;
+                    }
                 }
                 "i" => {
                     self.vim_state.mode = VimMode::Insert;
@@ -570,6 +596,7 @@ impl State<'_> {
 
     fn redraw(&mut self) {
         self.text_area.clamp_cursor();
+        let text_height = self.measure_line_advance();
         let (cursor_x, cursor_y) = self.cursor_logical_position();
 
         let elapsed_ms = self.cursor_blink_start.elapsed().as_millis();
@@ -590,15 +617,28 @@ impl State<'_> {
         let viewport_width = config.width as f32;
         let viewport_height = config.height as f32;
 
-        let text = self.text_area.string();
+        self.view_rows = ((config.height as f32 * self.text_input_height_ratio)
+            / text_height
+            / self.scale_factor)
+            .floor() as usize;
+
+        let text = self.text_area.string_with_row_offset(self.scroll_row);
+        let mut offset_x = 0.0;
+        if cursor_x * self.scale_factor > config.width as f32 * 0.8 {
+            offset_x = config.width as f32 * 0.8 - cursor_x * self.scale_factor;
+        }
         let section = Section::default()
             .add_text(
                 Text::new(&text)
                     .with_scale(self.font_size)
                     .with_color([0.9, 0.5, 0.5, 1.0]),
             )
-            .with_bounds((config.width as f32, config.height as f32))
-            .with_layout(Layout::default().line_breaker(BuiltInLineBreaker::UnicodeLineBreaker));
+            .with_bounds((
+                (config.width * 2) as f32,
+                config.height as f32 * self.text_input_height_ratio,
+            ))
+            .with_layout(Layout::default().line_breaker(BuiltInLineBreaker::UnicodeLineBreaker))
+            .with_screen_position((offset_x, 0.0));
         // self.section = Some(section.to_owned());
 
         let mut section_x = section.screen_position.0; // Section 左上角 X 坐标 (逻辑像素)
@@ -610,19 +650,19 @@ impl State<'_> {
             .file_name()
             .and_then(|os| os.to_str())
             .unwrap_or("Untitled");
-        let debug_text = format!(
-            "{} | Ln {}, Col {} | Mode: {} | {:.1} {:.1}",
-            name, cursor_row, cursor_col, self.vim_state.mode, cursor_x, cursor_y
+        let status_text = format!(
+            "{} | Ln {}, Col {} | Mode: {} | {:.1} {:.1} | {}",
+            name, cursor_row, cursor_col, self.vim_state.mode, cursor_x, cursor_y, self.view_rows,
         );
         let status_section = Section::default()
             .add_text(
-                Text::new(&debug_text)
-                    .with_scale(self.font_size * 1.1)
+                Text::new(&status_text)
+                    .with_scale(self.font_size)
                     .with_color([0.2, 0.5, 0.8, 1.0]),
             )
             .with_bounds((config.width as f32, config.height as f32))
             .with_layout(Layout::default().line_breaker(BuiltInLineBreaker::AnyCharLineBreaker))
-            .with_screen_position((0.0, config.height as f32 * 0.94));
+            .with_screen_position((0.0, (config.height as f32) - (text_height + 15.0)));
 
         let input_text = self
             .text_input
@@ -642,7 +682,7 @@ impl State<'_> {
                     )
                     .with_screen_position((
                         0.0,
-                        config.height as f32 * self.text_input_height_ratio,
+                        (config.height as f32) - 2.0 * (text_height + 15.0),
                     ));
                 section_x = input_section.screen_position.0;
                 section_y = input_section.screen_position.1;
@@ -987,6 +1027,9 @@ fn main() {
         text_area: textarea::TextArea::new(),
         font_size: 28.,
         section: None,
+
+        scroll_row: 0,
+        view_rows: 0,
 
         text_input: None,
         text_input_height_ratio: 0.9,

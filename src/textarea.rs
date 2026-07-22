@@ -169,6 +169,15 @@ impl TextArea {
             .join("\n")
     }
 
+    pub(crate) fn string_with_row_offset(&self, row_offset: usize) -> String {
+        self.lines
+            .iter()
+            .skip(row_offset)
+            .map(|line| line.text.clone())
+            .collect::<Vec<String>>()
+            .join("\n")
+    }
+
     pub(crate) fn cursor_prefix_string(&self) -> String {
         if let Some(line) = self.lines.get(self.cursor_row) {
             line.text.chars().take(self.cursor_col).collect()
@@ -181,6 +190,16 @@ impl TextArea {
         self.lines
             .iter()
             .take(self.cursor_row)
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub(crate) fn lines_before_cursor_string1(&self, row_offset: usize) -> String {
+        self.lines
+            .iter()
+            .skip(row_offset)
+            .take(self.cursor_row.saturating_sub(row_offset))
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n")
