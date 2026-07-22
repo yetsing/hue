@@ -6,6 +6,7 @@ mod textarea;
 use ctx::Ctx;
 use glyph_brush::OwnedSection;
 use glyph_brush::ab_glyph::FontRef;
+use core::panic;
 use std::fmt;
 use std::fs::File;
 use std::io::Write;
@@ -126,6 +127,13 @@ struct State<'a> {
 }
 
 impl State<'_> {
+    fn initialize(&mut self) {
+        if self.text_input_height_ratio <= 0.0 || self.text_input_height_ratio >= 1.0 {
+            panic!("Invalid text_input_height_ratio: {}. It must be between 0.0 and 1.0 (exclusive).", self.text_input_height_ratio);
+        }
+        self.update_fileinfos();
+    }
+
     fn update_fileinfos(&mut self) {
         match fileexplorer::list_directory(self.current_dir.to_str().unwrap()) {
             Ok(files) => {
@@ -603,13 +611,13 @@ impl State<'_> {
             .and_then(|os| os.to_str())
             .unwrap_or("Untitled");
         let debug_text = format!(
-            "{} Cursor: ({}, {}), Mode: {}, {} {}",
+            "{} | Ln {}, Col {} | Mode: {} | {:.1} {:.1}",
             name, cursor_row, cursor_col, self.vim_state.mode, cursor_x, cursor_y
         );
-        let debug_section = Section::default()
+        let status_section = Section::default()
             .add_text(
                 Text::new(&debug_text)
-                    .with_scale(40.0)
+                    .with_scale(self.font_size * 1.1)
                     .with_color([0.2, 0.5, 0.8, 1.0]),
             )
             .with_bounds((config.width as f32, config.height as f32))
@@ -663,14 +671,14 @@ impl State<'_> {
         queue.write_buffer(caret_vertex_buffer, 0, caret_vertex_bytes);
 
         if let Some(input_section) = input_section {
-            match brush.queue(device, queue, [section, debug_section, input_section]) {
+            match brush.queue(device, queue, [section, status_section, input_section]) {
                 Ok(_) => (),
                 Err(err) => {
                     panic!("{err}");
                 }
             };
         } else {
-            match brush.queue(device, queue, [section, debug_section]) {
+            match brush.queue(device, queue, [section, status_section]) {
                 Ok(_) => (),
                 Err(err) => {
                     panic!("{err}");
@@ -1010,7 +1018,7 @@ fn main() {
         ctx: None,
     };
 
-    state.update_fileinfos();
+    state.initialize();
 
     let _ = event_loop.run_app(&mut state);
 }
