@@ -157,6 +157,25 @@ impl TextArea {
         }
     }
 
+    pub(crate) fn new_line_above_cursor(&mut self) {
+        if self.cursor_row < self.lines.len() {
+            let new_line = Line::new(String::new());
+            self.lines.insert(self.cursor_row, new_line);
+            self.cursor_col = 0;
+            self.preferred_col = 0; // Update preferred column after inserting a new line
+        }
+    }
+
+    pub(crate) fn new_line_below_cursor(&mut self) {
+        if self.cursor_row < self.lines.len() {
+            let new_line = Line::new(String::new());
+            self.lines.insert(self.cursor_row + 1, new_line);
+            self.cursor_row += 1;
+            self.cursor_col = 0;
+            self.preferred_col = 0; // Update preferred column after inserting a new line
+        }
+    }
+
     pub(crate) fn append_line(&mut self, text: &str) {
         self.lines.push(Line::new(text.to_string()));
     }
@@ -234,6 +253,17 @@ impl TextArea {
         }
     }
 
+    pub(crate) fn clamp1_cursor(&mut self) {
+        if self.cursor_row >= self.lines.len() {
+            self.cursor_row = self.lines.len().saturating_sub(1);
+        }
+        let length = self.lines[self.cursor_row].length();
+        let max_col = length.saturating_sub(1);
+        if self.cursor_col > max_col {
+            self.cursor_col = max_col;
+        }
+    }
+
     pub(crate) fn move_left_cursor(&mut self) {
         if self.cursor_col > self.frozen_pos.1 {
             self.cursor_col -= 1;
@@ -241,10 +271,20 @@ impl TextArea {
         }
     }
 
-    pub(crate) fn move_right_cursor(&mut self) {
+    pub(crate) fn move_right1_cursor(&mut self) {
         if self.cursor_row < self.lines.len() {
             let line_len = self.lines[self.cursor_row].length();
             if line_len > 1 && self.cursor_col < line_len - 1 {
+                self.cursor_col += 1;
+                self.preferred_col = self.cursor_col; // Update preferred column when moving right
+            }
+        }
+    }
+
+    pub(crate) fn move_right_cursor(&mut self) {
+        if self.cursor_row < self.lines.len() {
+            let line_len = self.lines[self.cursor_row].length();
+            if line_len > 0 && self.cursor_col < line_len {
                 self.cursor_col += 1;
                 self.preferred_col = self.cursor_col; // Update preferred column when moving right
             }
@@ -290,10 +330,8 @@ impl TextArea {
     pub(crate) fn end_of_line_cursor(&mut self) {
         if self.cursor_row < self.lines.len() {
             let line_len = self.lines[self.cursor_row].length();
-            if line_len > 0 {
-                self.cursor_col = line_len - 1;
-                self.preferred_col = self.cursor_col; // Update preferred column when moving to end of line
-            }
+            self.cursor_col = line_len;
+            self.preferred_col = self.cursor_col; // Update preferred column when moving to end of line
         }
     }
 }

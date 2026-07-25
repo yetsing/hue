@@ -447,12 +447,22 @@ impl State<'_> {
         }
         match key {
             Key::Character(char) if !self.ime_active => match char.as_str() {
+                "a" => {
+                    self.text_area.move_right_cursor();
+                    self.vim_state.mode = VimMode::Insert;
+                    println!("Switched to Insert mode");
+                }
+                "A" => {
+                    self.text_area.end_of_line_cursor();
+                    self.vim_state.mode = VimMode::Insert;
+                    println!("Switched to Insert mode");
+                }
                 "h" => {
                     self.text_area.move_left_cursor();
                     self.cursor_blink_start = Instant::now();
                 }
                 "l" => {
-                    self.text_area.move_right_cursor();
+                    self.text_area.move_right1_cursor();
                     self.cursor_blink_start = Instant::now();
                 }
                 "j" => {
@@ -477,6 +487,21 @@ impl State<'_> {
                     }
                 }
                 "i" => {
+                    self.vim_state.mode = VimMode::Insert;
+                    println!("Switched to Insert mode");
+                }
+                "I" => {
+                    self.text_area.start_of_line_cursor();
+                    self.vim_state.mode = VimMode::Insert;
+                    println!("Switched to Insert mode");
+                }
+                "o" => {
+                    self.text_area.new_line_below_cursor();
+                    self.vim_state.mode = VimMode::Insert;
+                    println!("Switched to Insert mode");
+                }
+                "O" => {
+                    self.text_area.new_line_above_cursor();
                     self.vim_state.mode = VimMode::Insert;
                     println!("Switched to Insert mode");
                 }
@@ -554,6 +579,8 @@ impl State<'_> {
             Key::Named(k) => match k {
                 NamedKey::Escape => {
                     self.vim_state.mode = VimMode::Command;
+                    // vim 命令模式下，光标应该在当前行的最后一个字符上，而不是行尾之后
+                    self.text_area.clamp1_cursor();
                     println!("Switched to Command mode");
                 }
                 NamedKey::Delete => {
@@ -578,6 +605,8 @@ impl State<'_> {
                 // Handle Ctrl+[ to switch to Command mode （终端里面 Ctrl + [ 对应 Esc ）
                 if self.modifier.control_key() && char.as_str() == "[" {
                     self.vim_state.mode = VimMode::Command;
+                    // vim 命令模式下，光标应该在当前行的最后一个字符上，而不是行尾之后
+                    self.text_area.clamp1_cursor();
                     println!("Switched to Command mode");
                     return;
                 }
@@ -588,7 +617,7 @@ impl State<'_> {
         }
     }
 
-    fn handle_key_in_visual_mode(&mut self, key: Key) {
+    fn handle_key_in_visual_mode(&mut self, _key: Key) {
         if self.vim_state.mode != VimMode::Visual {
             return;
         }
@@ -1008,7 +1037,7 @@ impl ApplicationHandler for State<'_> {
     }
 }
 
-fn main() {
+fn main() -> Result<(), winit::error::EventLoopError> {
     if std::env::var("RUST_LOG").is_err() {
         unsafe {
             std::env::set_var("RUST_LOG", "error");
@@ -1063,5 +1092,5 @@ fn main() {
 
     state.initialize();
 
-    let _ = event_loop.run_app(&mut state);
+    event_loop.run_app(&mut state)
 }
