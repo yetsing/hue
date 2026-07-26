@@ -9,3 +9,4 @@ text editor
 - [x] 打开/保存文件
 - [x] 滚动浏览
 - [x] 实现 a A I o O 命令
+- [x] 实现 x X 命令

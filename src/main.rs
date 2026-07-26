@@ -360,7 +360,7 @@ impl State<'_> {
                         self.cursor_blink_start = Instant::now();
                     }
                     NamedKey::Backspace => {
-                        text_input.delete_char_before_cursor();
+                        text_input.delete_char_before_cursor(true);
                         self.cursor_blink_start = Instant::now();
                     }
                     _ => {}
@@ -505,6 +505,12 @@ impl State<'_> {
                     self.vim_state.mode = VimMode::Insert;
                     println!("Switched to Insert mode");
                 }
+                "x" => {
+                    self.text_area.delete_char_after_cursor(false);
+                }
+                "X" => {
+                    self.text_area.delete_char_before_cursor(false);
+                }
                 "v" => {
                     self.vim_state.mode = VimMode::Visual;
                     println!("Switched to Visual mode");
@@ -555,7 +561,7 @@ impl State<'_> {
                     self.cursor_blink_start = Instant::now();
                 }
                 NamedKey::Backspace => {
-                    text_input.delete_char_before_cursor();
+                    text_input.delete_char_before_cursor(true);
                     self.cursor_blink_start = Instant::now();
                     if text_input.is_empty() {
                         self.text_input = None;
@@ -584,11 +590,11 @@ impl State<'_> {
                     println!("Switched to Command mode");
                 }
                 NamedKey::Delete => {
-                    self.text_area.delete_char_after_cursor();
+                    self.text_area.delete_char_after_cursor(true);
                     self.cursor_blink_start = Instant::now();
                 }
                 NamedKey::Backspace => {
-                    self.text_area.delete_char_before_cursor();
+                    self.text_area.delete_char_before_cursor(true);
                     self.cursor_blink_start = Instant::now();
                 }
                 NamedKey::Space => {
