@@ -106,7 +106,7 @@ struct State<'a> {
     caret_vertex_buffer: Option<wgpu::Buffer>,
     cursor_blink_start: Instant,
 
-    ime_active: bool,
+    is_ime_active: bool,
     vim_state: VimState,
     modifier: ModifiersState,
 
@@ -122,7 +122,7 @@ struct State<'a> {
     scale_factor: f32,
 
     // 是否关闭窗口，用来给命令行模式的 `:q` 命令使用
-    closed: bool,
+    is_closed: bool,
 
     // wgpu
     ctx: Option<Ctx>,
@@ -409,7 +409,7 @@ impl State<'_> {
                     _ => {}
                 },
             },
-            Key::Character(char) if !self.ime_active => match self.text_input.as_mut() {
+            Key::Character(char) if !self.is_ime_active => match self.text_input.as_mut() {
                 Some(text_input) => text_input.insert_text_at_cursor(char.as_str()),
                 None => match char.as_str() {
                     "h" => {
@@ -446,7 +446,7 @@ impl State<'_> {
             return;
         }
         match key {
-            Key::Character(char) if !self.ime_active => match char.as_str() {
+            Key::Character(char) if !self.is_ime_active => match char.as_str() {
                 "a" => {
                     self.text_area.move_right_cursor();
                     self.vim_state.mode = VimMode::Insert;
@@ -544,11 +544,11 @@ impl State<'_> {
                             self.save_file();
                         }
                         "q" => {
-                            self.closed = true;
+                            self.is_closed = true;
                         }
                         "wq" => {
                             if self.save_file() {
-                                self.closed = true;
+                                self.is_closed = true;
                             }
                         }
                         _ => {}
@@ -607,7 +607,7 @@ impl State<'_> {
                 }
                 _ => {}
             },
-            Key::Character(char) if !self.ime_active => {
+            Key::Character(char) if !self.is_ime_active => {
                 // Handle Ctrl+[ to switch to Command mode （终端里面 Ctrl + [ 对应 Esc ）
                 if self.modifier.control_key() && char.as_str() == "[" {
                     self.vim_state.mode = VimMode::Command;
@@ -941,7 +941,7 @@ impl ApplicationHandler for State<'_> {
             WindowEvent::Ime(ime_event) => {
                 match ime_event {
                     Ime::Enabled => {
-                        self.ime_active = true;
+                        self.is_ime_active = true;
                         println!("IME enabled for Window={window_id:?}");
                         let mut screen_x = 0.0 as f32;
                         let mut screen_y = 0.0 as f32;
@@ -969,7 +969,7 @@ impl ApplicationHandler for State<'_> {
                         );
                     }
                     Ime::Disabled => {
-                        self.ime_active = false;
+                        self.is_ime_active = false;
                         println!("IME disabled for Window={window_id:?}");
                     }
                     Ime::Preedit(text, caret_pos) => {
@@ -1018,7 +1018,7 @@ impl ApplicationHandler for State<'_> {
             _ => (),
         };
 
-        if self.closed {
+        if self.is_closed {
             elwt.exit();
         }
     }
@@ -1074,7 +1074,7 @@ fn main() -> Result<(), winit::error::EventLoopError> {
         caret_vertex_buffer: None,
         cursor_blink_start: Instant::now(),
 
-        ime_active: false,
+        is_ime_active: false,
         vim_state: VimState::default(),
         modifier: ModifiersState::empty(),
 
@@ -1091,7 +1091,7 @@ fn main() -> Result<(), winit::error::EventLoopError> {
         fps: 0,
         scale_factor: 1.0,
 
-        closed: false,
+        is_closed: false,
 
         ctx: None,
     };

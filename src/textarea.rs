@@ -99,12 +99,12 @@ impl TextArea {
         }
     }
 
-    pub(crate) fn delete_char_before_cursor(&mut self, delete_newline: bool) {
+    pub(crate) fn delete_char_before_cursor(&mut self, can_delete_newline: bool) {
         if (self.cursor_row, self.cursor_col) <= self.frozen_pos {
             return;
         }
 
-        if delete_newline && self.cursor_col == 0 {
+        if can_delete_newline && self.cursor_col == 0 {
             // Merge with the previous line
             let current_line = self.lines.remove(self.cursor_row);
             if let Some(prev_line) = self.lines.get_mut(self.cursor_row - 1) {
@@ -123,7 +123,7 @@ impl TextArea {
         }
     }
 
-    pub(crate) fn delete_char_after_cursor(&mut self, delete_newline: bool) {
+    pub(crate) fn delete_char_after_cursor(&mut self, can_delete_newline: bool) {
         let line_count = self.lines.len();
         if self.cursor_row >= line_count {
             return;
@@ -134,7 +134,9 @@ impl TextArea {
             if let Some(line) = self.lines.get_mut(self.cursor_row) {
                 line.delete_text(self.cursor_col, 1);
             }
-        } else if delete_newline && self.cursor_col == line_len && self.cursor_row + 1 < line_count
+        } else if can_delete_newline
+            && self.cursor_col == line_len
+            && self.cursor_row + 1 < line_count
         {
             // Merge with the next line
             let next_line = self.lines.remove(self.cursor_row + 1);
