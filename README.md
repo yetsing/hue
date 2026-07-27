@@ -10,3 +10,4 @@ text editor
 - [x] 滚动浏览
 - [x] 实现 a A I o O 命令
 - [x] 实现 x X 命令
+- [x] 实现 g G 命令

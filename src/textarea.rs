@@ -239,6 +239,10 @@ impl TextArea {
     pub(crate) fn is_empty(&self) -> bool {
         self.lines.len() == 1 && self.lines[0].length() == 0
     }
+
+    pub(crate) fn line_count(&self) -> usize {
+        self.lines.len()
+    }
 }
 
 // cursor movement methods

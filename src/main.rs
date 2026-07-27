@@ -83,6 +83,8 @@ impl fmt::Display for VimMode {
 #[derive(Default)]
 struct VimState {
     mode: VimMode,
+    num_str: String,
+    cmd_str: String,
 }
 
 struct State<'a> {
@@ -332,6 +334,30 @@ impl State<'_> {
         }
     }
 
+    fn scroll_row(&mut self) {
+        let (cursor_row, _) = self.text_area.cursor_position();
+        if cursor_row < self.scroll_row {
+            let old_scroll_row = self.scroll_row;
+            self.scroll_row = cursor_row;
+            if let Some(window) = self.window.clone().as_mut()
+                && old_scroll_row != self.scroll_row
+            {
+                window.request_redraw();
+            }
+            return;
+        }
+        if self.view_rows > 0 && cursor_row.saturating_sub(self.scroll_row) + 2 >= self.view_rows {
+            let old_scroll_row = self.scroll_row;
+            self.scroll_row = cursor_row + 2 - self.view_rows + 1;
+            if let Some(window) = self.window.clone().as_mut()
+                && old_scroll_row != self.scroll_row
+            {
+                window.request_redraw();
+            }
+            return;
+        }
+    }
+
     fn handle_key_in_directory_mode(&mut self, key: Key) {
         if self.vim_state.mode != VimMode::Directory {
             return;
@@ -412,12 +438,12 @@ impl State<'_> {
             Key::Character(char) if !self.is_ime_active => match self.text_input.as_mut() {
                 Some(text_input) => text_input.insert_text_at_cursor(char.as_str()),
                 None => match char.as_str() {
+                    "G" => {
+                        let line_count = self.text_area.line_count();
+                        self.text_area.goto_cursor(line_count - 1, 0);
+                    }
                     "h" => {
                         self.text_area.move_left_cursor();
-                        self.cursor_blink_start = Instant::now();
-                    }
-                    "l" => {
-                        self.text_area.move_right_cursor();
                         self.cursor_blink_start = Instant::now();
                     }
                     "j" => {
@@ -426,6 +452,10 @@ impl State<'_> {
                     }
                     "k" => {
                         self.text_area.move_up_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    "l" => {
+                        self.text_area.move_right_cursor();
                         self.cursor_blink_start = Instant::now();
                     }
                     "n" => {
@@ -446,85 +476,118 @@ impl State<'_> {
             return;
         }
         match key {
-            Key::Character(char) if !self.is_ime_active => match char.as_str() {
-                "a" => {
-                    self.text_area.move_right_cursor();
-                    self.vim_state.mode = VimMode::Insert;
-                    println!("Switched to Insert mode");
-                }
-                "A" => {
-                    self.text_area.end_of_line_cursor();
-                    self.vim_state.mode = VimMode::Insert;
-                    println!("Switched to Insert mode");
-                }
-                "h" => {
-                    self.text_area.move_left_cursor();
-                    self.cursor_blink_start = Instant::now();
-                }
-                "l" => {
-                    self.text_area.move_right1_cursor();
-                    self.cursor_blink_start = Instant::now();
-                }
-                "j" => {
-                    self.text_area.move_down_cursor();
-                    self.cursor_blink_start = Instant::now();
-                    let (cursor_row, _) = self.text_area.cursor_position();
-                    if self.view_rows > 0
-                        && cursor_row.saturating_sub(self.scroll_row) + 2 >= self.view_rows
-                    {
-                        self.scroll_row = cursor_row + 2 - self.view_rows + 1;
-                        if let Some(window) = self.window.clone().as_mut() {
-                            window.request_redraw();
-                        }
-                    }
-                }
-                "k" => {
-                    self.text_area.move_up_cursor();
-                    self.cursor_blink_start = Instant::now();
-                    let (cursor_row, _) = self.text_area.cursor_position();
-                    if self.scroll_row > 0 && cursor_row < self.scroll_row {
-                        self.scroll_row -= 1;
-                    }
-                }
-                "i" => {
-                    self.vim_state.mode = VimMode::Insert;
-                    println!("Switched to Insert mode");
-                }
-                "I" => {
-                    self.text_area.start_of_line_cursor();
-                    self.vim_state.mode = VimMode::Insert;
-                    println!("Switched to Insert mode");
-                }
-                "o" => {
-                    self.text_area.new_line_below_cursor();
-                    self.vim_state.mode = VimMode::Insert;
-                    println!("Switched to Insert mode");
-                }
-                "O" => {
-                    self.text_area.new_line_above_cursor();
-                    self.vim_state.mode = VimMode::Insert;
-                    println!("Switched to Insert mode");
-                }
-                "x" => {
-                    self.text_area.delete_char_after_cursor(false);
-                }
-                "X" => {
-                    self.text_area.delete_char_before_cursor(false);
-                }
-                "v" => {
-                    self.vim_state.mode = VimMode::Visual;
-                    println!("Switched to Visual mode");
-                }
-                ":" => {
-                    self.vim_state.mode = VimMode::CommandLine;
-                    self.text_input = Some(textarea::TextArea::new());
-                    if let Some(text_input) = self.text_input.as_mut() {
-                        text_input.insert_text_at_cursor(":");
-                    }
-                    println!("Switched to Command-Line mode");
+            Key::Named(k) => match k {
+                NamedKey::Escape => {
+                    self.vim_state.num_str.clear();
+                    self.vim_state.cmd_str.clear();
                 }
                 _ => {}
             },
+            Key::Character(char) if !self.is_ime_active => {
+                if !self.vim_state.cmd_str.is_empty() {
+                    self.vim_state.cmd_str.push_str(char.as_str());
+                    match self.vim_state.cmd_str.as_str() {
+                        "gg" => {
+                            self.vim_state.cmd_str.clear();
+                            self.text_area.goto_cursor(0, 0);
+                            self.scroll_row();
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+                match char.as_str() {
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "0" => {
+                        self.vim_state.num_str.push_str(char.as_str());
+                    }
+                    "a" => {
+                        self.text_area.move_right_cursor();
+                        self.vim_state.mode = VimMode::Insert;
+                        println!("Switched to Insert mode");
+                    }
+                    "A" => {
+                        self.text_area.end_of_line_cursor();
+                        self.vim_state.mode = VimMode::Insert;
+                        println!("Switched to Insert mode");
+                    }
+                    "g" => {
+                        self.vim_state.cmd_str.push_str(char.as_str());
+                    }
+                    "G" => {
+                        let last_line = self.text_area.line_count().saturating_sub(1);
+                        let mut line_num: usize;
+                        if self.vim_state.num_str.is_empty() {
+                            line_num = last_line;
+                        } else {
+                            line_num = self.vim_state.num_str.parse::<usize>().unwrap_or(0);
+                            line_num = line_num.min(last_line);
+                            self.vim_state.num_str.clear();
+                        }
+                        self.text_area.goto_cursor(line_num, 0);
+                        self.scroll_row();
+                    }
+                    "h" => {
+                        self.text_area.move_left_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    "i" => {
+                        self.vim_state.mode = VimMode::Insert;
+                        println!("Switched to Insert mode");
+                    }
+                    "I" => {
+                        self.text_area.start_of_line_cursor();
+                        self.vim_state.mode = VimMode::Insert;
+                        println!("Switched to Insert mode");
+                    }
+                    "j" => {
+                        self.text_area.move_down_cursor();
+                        self.cursor_blink_start = Instant::now();
+                        self.scroll_row();
+                    }
+                    "k" => {
+                        self.text_area.move_up_cursor();
+                        self.cursor_blink_start = Instant::now();
+                        self.scroll_row();
+                        // let (cursor_row, _) = self.text_area.cursor_position();
+                        // if self.scroll_row > 0 && cursor_row < self.scroll_row {
+                        //     self.scroll_row -= 1;
+                        // }
+                    }
+                    "l" => {
+                        self.text_area.move_right1_cursor();
+                        self.cursor_blink_start = Instant::now();
+                    }
+                    "o" => {
+                        self.text_area.new_line_below_cursor();
+                        self.vim_state.mode = VimMode::Insert;
+                        println!("Switched to Insert mode");
+                    }
+                    "O" => {
+                        self.text_area.new_line_above_cursor();
+                        self.vim_state.mode = VimMode::Insert;
+                        println!("Switched to Insert mode");
+                    }
+                    "x" => {
+                        self.text_area.delete_char_after_cursor(false);
+                    }
+                    "X" => {
+                        self.text_area.delete_char_before_cursor(false);
+                    }
+                    "v" => {
+                        self.vim_state.mode = VimMode::Visual;
+                        println!("Switched to Visual mode");
+                    }
+                    ":" => {
+                        self.vim_state.mode = VimMode::CommandLine;
+                        self.text_input = Some(textarea::TextArea::new());
+                        if let Some(text_input) = self.text_input.as_mut() {
+                            text_input.insert_text_at_cursor(":");
+                        }
+                        println!("Switched to Command-Line mode");
+                    }
+                    _ => {}
+                }
+            }
             _ => {}
         }
     }
@@ -543,13 +606,16 @@ impl State<'_> {
                         "w" => {
                             self.save_file();
                         }
-                        "q" => {
-                            self.is_closed = true;
-                        }
                         "wq" => {
                             if self.save_file() {
                                 self.is_closed = true;
                             }
+                        }
+                        "q" => {
+                            self.is_closed = true;
+                        }
+                        "qa" => {
+                            self.is_closed = true;
                         }
                         _ => {}
                     };
