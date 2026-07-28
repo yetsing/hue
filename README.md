@@ -11,3 +11,4 @@ text editor
 - [x] 实现 a A I o O 命令
 - [x] 实现 x X 命令
 - [x] 实现 g G 命令
+- [x] 实现 y Y p P 命令

@@ -97,6 +97,9 @@ struct State<'a> {
     font_size: f32,
     section: Option<OwnedSection>,
 
+    has_copy_newline: bool,
+    copy_buffer: String,
+
     scroll_row: usize,
     view_rows: usize,
 
@@ -358,6 +361,12 @@ impl State<'_> {
         }
     }
 
+    fn copy_lines(&mut self, offset: usize, count: usize) {
+        let s = self.text_area.lines_with(offset, count);
+        self.copy_buffer = s;
+        self.has_copy_newline = true;
+    }
+
     fn handle_key_in_directory_mode(&mut self, key: Key) {
         if self.vim_state.mode != VimMode::Directory {
             return;
@@ -492,6 +501,18 @@ impl State<'_> {
                             self.text_area.goto_cursor(0, 0);
                             self.scroll_row();
                         }
+                        "yy" => {
+                            self.vim_state.cmd_str.clear();
+                            let line_count: usize;
+                            if self.vim_state.num_str.is_empty() {
+                                line_count = 1;
+                            } else {
+                                line_count = self.vim_state.num_str.parse::<usize>().unwrap_or(1);
+                                self.vim_state.num_str.clear();
+                            }
+                            let (cursor_row, _) = self.text_area.cursor_position();
+                            self.copy_lines(cursor_row, line_count);
+                        }
                         _ => {}
                     }
                     return;
@@ -567,11 +588,48 @@ impl State<'_> {
                         self.vim_state.mode = VimMode::Insert;
                         println!("Switched to Insert mode");
                     }
+                    "p" => {
+                        if !self.copy_buffer.is_empty() {
+                            if self.has_copy_newline {
+                                self.text_area
+                                    .insert_multiline_text_below_cursor(&self.copy_buffer);
+                            } else {
+                                let (_, cursor_col) = self.text_area.cursor_position();
+                                self.text_area
+                                    .insert_text_at(cursor_col + 1, &self.copy_buffer);
+                            }
+                        }
+                    }
+                    "P" => {
+                        if !self.copy_buffer.is_empty() {
+                            if self.has_copy_newline {
+                                self.text_area
+                                    .insert_multiline_text_above_cursor(&self.copy_buffer);
+                            } else {
+                                let (_, cursor_col) = self.text_area.cursor_position();
+                                self.text_area.insert_text_at(cursor_col, &self.copy_buffer);
+                            }
+                        }
+                    }
                     "x" => {
                         self.text_area.delete_char_after_cursor(false);
                     }
                     "X" => {
                         self.text_area.delete_char_before_cursor(false);
+                    }
+                    "y" => {
+                        self.vim_state.cmd_str.push_str(char.as_str());
+                    }
+                    "Y" => {
+                        let line_count: usize;
+                        if self.vim_state.num_str.is_empty() {
+                            line_count = 1;
+                        } else {
+                            line_count = self.vim_state.num_str.parse::<usize>().unwrap_or(1);
+                            self.vim_state.num_str.clear();
+                        }
+                        let (cursor_row, _) = self.text_area.cursor_position();
+                        self.copy_lines(cursor_row, line_count);
                     }
                     "v" => {
                         self.vim_state.mode = VimMode::Visual;
@@ -1128,6 +1186,9 @@ fn main() -> Result<(), winit::error::EventLoopError> {
         text_area: textarea::TextArea::new(),
         font_size: 28.,
         section: None,
+
+        has_copy_newline: false,
+        copy_buffer: String::new(),
 
         scroll_row: 0,
         view_rows: 0,

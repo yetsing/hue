@@ -78,12 +78,41 @@ impl TextArea {
         }
     }
 
+    /// Inserts text at the current cursor position and updates the cursor position accordingly.
+    /// Text can be multiple characters, but it does not handle newlines.
     pub(crate) fn insert_text_at_cursor(&mut self, text: &str) {
+        self.insert_text_at(self.cursor_col, text);
+    }
+
+    pub(crate) fn insert_text_at(&mut self, col: usize, text: &str) {
         if let Some(line) = self.lines.get_mut(self.cursor_row) {
-            line.insert_text(text, self.cursor_col);
-            self.cursor_col += text.chars().count();
+            line.insert_text(text, col);
+            self.cursor_col = col + text.chars().count();
             self.preferred_col = self.cursor_col; // Update preferred column after insertion
         }
+    }
+
+    pub(crate) fn insert_multiline_text_above_cursor(&mut self, text: &str) {
+        let lines: Vec<Line> = text
+            .lines()
+            .map(|line| Line::new(line.to_string()))
+            .collect();
+        let insert_pos = self.cursor_row;
+        self.lines.splice(insert_pos..insert_pos, lines);
+        self.cursor_col = 0;
+        self.preferred_col = 0; // Update preferred column after insertion
+    }
+
+    pub(crate) fn insert_multiline_text_below_cursor(&mut self, text: &str) {
+        let lines: Vec<Line> = text
+            .lines()
+            .map(|line| Line::new(line.to_string()))
+            .collect();
+        let insert_pos = self.cursor_row + 1;
+        self.lines.splice(insert_pos..insert_pos, lines);
+        self.cursor_row += 1;
+        self.cursor_col = 0;
+        self.preferred_col = 0; // Update preferred column after insertion
     }
 
     pub(crate) fn insert_newline_at_cursor(&mut self) {
@@ -222,6 +251,16 @@ impl TextArea {
             .iter()
             .skip(row_offset)
             .take(self.cursor_row.saturating_sub(row_offset))
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub(crate) fn lines_with(&self, offset: usize, count: usize) -> String {
+        self.lines
+            .iter()
+            .skip(offset)
+            .take(count)
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n")
