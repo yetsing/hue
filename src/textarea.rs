@@ -175,17 +175,35 @@ impl TextArea {
         }
     }
 
-    pub(crate) fn delete_line_at_cursor(&mut self) {
+    pub(crate) fn delete_lines_at_cursor(&mut self, n: usize) {
         if self.cursor_row < self.lines.len() {
-            self.lines.remove(self.cursor_row);
-            if self.cursor_row >= self.lines.len() && self.cursor_row > 0 {
-                self.cursor_row -= 1;
+            for _ in 0..n {
+                if self.cursor_row < self.lines.len() {
+                    self.lines.remove(self.cursor_row);
+                }
             }
-            self.cursor_col = usize::min(
-                self.cursor_col,
-                self.lines[self.cursor_row].length().saturating_sub(1),
-            );
+            self.clamp1_cursor();
             self.preferred_col = self.cursor_col; // Update preferred column after deletion
+        }
+    }
+
+    pub(crate) fn delete_to_start_of_line(&mut self) {
+        if let Some(line) = self.lines.get_mut(self.cursor_row) {
+            if self.cursor_col > 0 {
+                line.delete_text(0, self.cursor_col);
+                self.cursor_col = 0;
+                self.preferred_col = 0; // Update preferred column after deletion
+            }
+        }
+    }
+
+    pub(crate) fn delete_to_end_of_line(&mut self) {
+        if let Some(line) = self.lines.get_mut(self.cursor_row) {
+            let line_len = line.length();
+            if self.cursor_col < line_len {
+                line.delete_text(self.cursor_col, line_len - self.cursor_col);
+            }
+            self.clamp1_cursor();
         }
     }
 
@@ -237,21 +255,18 @@ impl TextArea {
         }
     }
 
-    pub(crate) fn lines_before_cursor_string(&self) -> String {
-        self.lines
-            .iter()
-            .take(self.cursor_row)
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    pub(crate) fn lines_before_cursor_string1(&self, row_offset: usize) -> String {
+    pub(crate) fn measure_lines_before_cursor_string(&self, row_offset: usize) -> String {
         self.lines
             .iter()
             .skip(row_offset)
             .take(self.cursor_row.saturating_sub(row_offset))
-            .map(|line| line.text.as_str())
+            .map(|line| {
+                if line.text.is_empty() {
+                    "Mg" // 空行替换为占位符
+                } else {
+                    line.text.as_str()
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -264,15 +279,6 @@ impl TextArea {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n")
-    }
-
-    pub(crate) fn trailing_empty_lines_before_cursor(&self) -> usize {
-        self.lines
-            .iter()
-            .take(self.cursor_row)
-            .rev()
-            .take_while(|line| line.text.is_empty())
-            .count()
     }
 
     pub(crate) fn is_empty(&self) -> bool {

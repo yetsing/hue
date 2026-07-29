@@ -19,7 +19,7 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{Ime, KeyEvent, MouseScrollDelta};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::keyboard::{self, Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::Window;
 use winit::{
     event::{ElementState, WindowEvent},
@@ -76,7 +76,7 @@ impl fmt::Display for VimMode {
             VimMode::Insert => "Insert",
             VimMode::Visual => "Visual",
         };
-        write!(f, "{}", s)
+        return write!(f, "{}", s);
     }
 }
 
@@ -297,23 +297,21 @@ impl State<'_> {
     fn cursor_logical_position(&mut self) -> (f32, f32) {
         // 第一步：仅从 text_input/text_area 中提取纯数据（String/usize）
         //         match 产生的 &self 借用在此语句结束时立即释放
-        let (cursor_prefix, preceding_lines, missing_empty_lines) = match self.text_input.as_ref() {
+        let (cursor_prefix, mut preceding_lines) = match self.text_input.as_ref() {
             Some(text_input) => (
                 text_input.cursor_prefix_string(),
-                text_input.lines_before_cursor_string(),
-                text_input.trailing_empty_lines_before_cursor(),
+                text_input.measure_lines_before_cursor_string(0),
             ),
             None => (
                 self.text_area.cursor_prefix_string(),
-                self.text_area.lines_before_cursor_string1(self.scroll_row),
-                self.text_area.trailing_empty_lines_before_cursor(),
+                self.text_area
+                    .measure_lines_before_cursor_string(self.scroll_row),
             ),
         };
 
         // 第二步：此时 self 上没有任何活跃借用，可以自由调用 &mut self 方法
         let cursor_x = self.measure_text_width(&cursor_prefix);
-        let cursor_y = self.measure_text_height(&preceding_lines)
-            + missing_empty_lines as f32 * self.measure_line_advance();
+        let cursor_y = self.measure_text_height(&preceding_lines);
 
         (cursor_x, cursor_y)
     }
@@ -496,6 +494,21 @@ impl State<'_> {
                 if !self.vim_state.cmd_str.is_empty() {
                     self.vim_state.cmd_str.push_str(char.as_str());
                     match self.vim_state.cmd_str.as_str() {
+                        "dd" => {
+                            self.vim_state.cmd_str.clear();
+                            let line_count: usize;
+                            if self.vim_state.num_str.is_empty() {
+                                line_count = 1;
+                            } else {
+                                line_count = self.vim_state.num_str.parse::<usize>().unwrap_or(1);
+                                self.vim_state.num_str.clear();
+                            }
+                            self.text_area.delete_lines_at_cursor(line_count);
+                        }
+                        "d$" => {
+                            self.vim_state.cmd_str.clear();
+                            self.text_area.delete_to_end_of_line();
+                        }
                         "gg" => {
                             self.vim_state.cmd_str.clear();
                             self.text_area.goto_cursor(0, 0);
@@ -530,6 +543,12 @@ impl State<'_> {
                         self.text_area.end_of_line_cursor();
                         self.vim_state.mode = VimMode::Insert;
                         println!("Switched to Insert mode");
+                    }
+                    "d" => {
+                        self.vim_state.cmd_str.push_str(char.as_str());
+                    }
+                    "D" => {
+                        self.text_area.delete_to_end_of_line();
                     }
                     "g" => {
                         self.vim_state.cmd_str.push_str(char.as_str());
@@ -728,6 +747,7 @@ impl State<'_> {
                 NamedKey::Enter => {
                     self.text_area.insert_newline_at_cursor();
                     self.cursor_blink_start = Instant::now();
+                    self.scroll_row();
                 }
                 _ => {}
             },
@@ -810,8 +830,15 @@ impl State<'_> {
             .and_then(|os| os.to_str())
             .unwrap_or("Untitled");
         let status_text = format!(
-            "{} | Ln {}, Col {} | Mode: {} | {:.1} {:.1} | {}",
-            name, cursor_row, cursor_col, self.vim_state.mode, cursor_x, cursor_y, self.view_rows,
+            "{} | Ln {}, Col {} | Mode: {} | {:.1} {:.1} | {} ({})",
+            name,
+            cursor_row,
+            cursor_col,
+            self.vim_state.mode,
+            cursor_x,
+            cursor_y,
+            self.scroll_row,
+            self.view_rows,
         );
         let status_section = Section::default()
             .add_text(

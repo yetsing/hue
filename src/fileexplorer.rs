@@ -14,20 +14,6 @@ pub struct FileInfo {
 }
 
 impl FileInfo {
-    /// 获取人性化的文件大小显示
-    pub fn size_human_readable(&self) -> String {
-        let size = self.size;
-        if size < 1024 {
-            format!("{} B", size)
-        } else if size < 1024 * 1024 {
-            format!("{:.1} KB", size as f64 / 1024.0)
-        } else if size < 1024 * 1024 * 1024 {
-            format!("{:.1} MB", size as f64 / (1024.0 * 1024.0))
-        } else {
-            format!("{:.1} GB", size as f64 / (1024.0 * 1024.0 * 1024.0))
-        }
-    }
-
     pub fn format_modified_time(&self) -> String {
         self.modified.format("%Y-%m-%d %H:%M:%S").to_string()
     }

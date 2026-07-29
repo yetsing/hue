@@ -10,5 +10,6 @@ text editor
 - [x] 滚动浏览
 - [x] 实现 a A I o O 命令
 - [x] 实现 x X 命令
-- [x] 实现 g G 命令
-- [x] 实现 y Y p P 命令
+- [x] 实现 g G 命令 (G nG gg)
+- [x] 实现 y Y p P 命令 (yy nyy nY p P)
+- [x] 实现 d D 命令 (dd ndd D d$)
