@@ -1,3 +1,5 @@
+use chrono::offset;
+
 fn char_to_byte_index(s: &str, char_index: usize) -> usize {
     if char_index == 0 {
         return 0;
@@ -176,11 +178,18 @@ impl TextArea {
     }
 
     pub(crate) fn delete_lines_at_cursor(&mut self, n: usize) {
+        if n >= self.lines.len() {
+            self.lines.clear();
+            self.lines.push(Line::new(String::new()));
+            self.cursor_row = 0;
+            self.cursor_col = 0;
+            self.preferred_col = 0; // Update preferred column after deletion
+            return;
+        }
         if self.cursor_row < self.lines.len() {
-            for _ in 0..n {
-                if self.cursor_row < self.lines.len() {
-                    self.lines.remove(self.cursor_row);
-                }
+            let actual_n = usize::min(n, self.lines.len() - self.cursor_row);
+            for _ in 0..actual_n {
+                self.lines.remove(self.cursor_row);
             }
             self.clamp1_cursor();
             self.preferred_col = self.cursor_col; // Update preferred column after deletion
@@ -374,6 +383,15 @@ impl TextArea {
         self.preferred_col = self.cursor_col; // Update preferred column when going to a specific position
     }
 
+    pub(crate) fn first_non_blank_of_line_cursor(&mut self) {
+        if self.cursor_row < self.lines.len() {
+            let line = &self.lines[self.cursor_row].text;
+            let first_non_blank_col = line.chars().position(|c| !c.is_whitespace()).unwrap_or(0);
+            self.cursor_col = first_non_blank_col;
+            self.preferred_col = self.cursor_col; // Update preferred column when moving to first non-blank
+        }
+    }
+
     pub(crate) fn start_of_line_cursor(&mut self) {
         self.cursor_col = 0;
         self.preferred_col = self.cursor_col; // Update preferred column when moving to start of line
@@ -383,6 +401,14 @@ impl TextArea {
         if self.cursor_row < self.lines.len() {
             let line_len = self.lines[self.cursor_row].length();
             self.cursor_col = line_len;
+            self.preferred_col = self.cursor_col; // Update preferred column when moving to end of line
+        }
+    }
+
+    pub(crate) fn end_offset_of_line_cursor(&mut self, offset: usize) {
+        if self.cursor_row < self.lines.len() {
+            let line_len = self.lines[self.cursor_row].length();
+            self.cursor_col = line_len.saturating_sub(offset);
             self.preferred_col = self.cursor_col; // Update preferred column when moving to end of line
         }
     }

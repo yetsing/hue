@@ -534,6 +534,12 @@ impl State<'_> {
                     "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "0" => {
                         self.vim_state.num_str.push_str(char.as_str());
                     }
+                    "$" => {
+                        self.text_area.end_offset_of_line_cursor(1);
+                    }
+                    "^" => {
+                        self.text_area.first_non_blank_of_line_cursor();
+                    }
                     "a" => {
                         self.text_area.move_right_cursor();
                         self.vim_state.mode = VimMode::Insert;
