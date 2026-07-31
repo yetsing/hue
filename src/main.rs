@@ -98,7 +98,7 @@ struct State<'a> {
     section: Option<OwnedSection>,
 
     has_copy_newline: bool,
-    copy_buffer: String,
+    copy_lines: Vec<String>,
 
     scroll_row: usize,
     view_rows: usize,
@@ -360,8 +360,7 @@ impl State<'_> {
     }
 
     fn copy_lines(&mut self, offset: usize, count: usize) {
-        let s = self.text_area.lines_with(offset, count);
-        self.copy_buffer = s;
+        self.copy_lines = self.text_area.lines_with(offset, count);
         self.has_copy_newline = true;
     }
 
@@ -509,6 +508,10 @@ impl State<'_> {
                             self.vim_state.cmd_str.clear();
                             self.text_area.delete_to_end_of_line();
                         }
+                        "d^" => {
+                            self.vim_state.cmd_str.clear();
+                            self.text_area.delete_to_start_of_line();
+                        }
                         "gg" => {
                             self.vim_state.cmd_str.clear();
                             self.text_area.goto_cursor(0, 0);
@@ -614,25 +617,28 @@ impl State<'_> {
                         println!("Switched to Insert mode");
                     }
                     "p" => {
-                        if !self.copy_buffer.is_empty() {
+                        if !self.copy_lines.is_empty() {
+                            let (cursor_row, cursor_col) = self.text_area.cursor_position();
                             if self.has_copy_newline {
-                                self.text_area
-                                    .insert_multiline_text_below_cursor(&self.copy_buffer);
+                                let lines = std::mem::take(&mut self.copy_lines);
+                                self.text_area.insert_lines_at(cursor_row + 1, lines);
                             } else {
-                                let (_, cursor_col) = self.text_area.cursor_position();
                                 self.text_area
-                                    .insert_text_at(cursor_col + 1, &self.copy_buffer);
+                                    .insert_text_at(cursor_col + 1, &self.copy_lines[0]);
                             }
                         }
                     }
                     "P" => {
-                        if !self.copy_buffer.is_empty() {
+                        if !self.copy_lines.is_empty() {
                             if self.has_copy_newline {
-                                self.text_area
-                                    .insert_multiline_text_above_cursor(&self.copy_buffer);
+                                self.text_area.insert_lines_at(
+                                    self.text_area.cursor_position().0,
+                                    std::mem::take(&mut self.copy_lines),
+                                );
                             } else {
                                 let (_, cursor_col) = self.text_area.cursor_position();
-                                self.text_area.insert_text_at(cursor_col, &self.copy_buffer);
+                                self.text_area
+                                    .insert_text_at(cursor_col, &self.copy_lines[0]);
                             }
                         }
                     }
@@ -1221,7 +1227,7 @@ fn main() -> Result<(), winit::error::EventLoopError> {
         section: None,
 
         has_copy_newline: false,
-        copy_buffer: String::new(),
+        copy_lines: Vec::new(),
 
         scroll_row: 0,
         view_rows: 0,

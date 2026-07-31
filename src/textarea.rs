@@ -94,27 +94,14 @@ impl TextArea {
         }
     }
 
-    pub(crate) fn insert_multiline_text_above_cursor(&mut self, text: &str) {
-        let lines: Vec<Line> = text
-            .lines()
-            .map(|line| Line::new(line.to_string()))
-            .collect();
-        let insert_pos = self.cursor_row;
-        self.lines.splice(insert_pos..insert_pos, lines);
-        self.cursor_col = 0;
-        self.preferred_col = 0; // Update preferred column after insertion
-    }
-
-    pub(crate) fn insert_multiline_text_below_cursor(&mut self, text: &str) {
-        let lines: Vec<Line> = text
-            .lines()
-            .map(|line| Line::new(line.to_string()))
-            .collect();
-        let insert_pos = self.cursor_row + 1;
-        self.lines.splice(insert_pos..insert_pos, lines);
-        self.cursor_row += 1;
-        self.cursor_col = 0;
-        self.preferred_col = 0; // Update preferred column after insertion
+    pub(crate) fn insert_lines_at(&mut self, row: usize, lines: Vec<String>) {
+        if row <= self.lines.len() {
+            self.lines
+                .splice(row..row, lines.into_iter().map(Line::new));
+            self.cursor_row = row;
+            self.cursor_col = 0;
+            self.preferred_col = 0; // Update preferred column after insertion
+        }
     }
 
     pub(crate) fn insert_newline_at_cursor(&mut self) {
@@ -280,14 +267,13 @@ impl TextArea {
             .join("\n")
     }
 
-    pub(crate) fn lines_with(&self, offset: usize, count: usize) -> String {
+    pub(crate) fn lines_with(&self, offset: usize, count: usize) -> Vec<String> {
         self.lines
             .iter()
             .skip(offset)
             .take(count)
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
+            .map(|line| line.text.clone())
+            .collect::<Vec<String>>()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
