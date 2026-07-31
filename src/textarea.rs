@@ -1,5 +1,3 @@
-use chrono::offset;
-
 fn char_to_byte_index(s: &str, char_index: usize) -> usize {
     if char_index == 0 {
         return 0;
@@ -83,12 +81,13 @@ impl TextArea {
     /// Inserts text at the current cursor position and updates the cursor position accordingly.
     /// Text can be multiple characters, but it does not handle newlines.
     pub(crate) fn insert_text_at_cursor(&mut self, text: &str) {
-        self.insert_text_at(self.cursor_col, text);
+        self.insert_text_at(self.cursor_row, self.cursor_col, text);
     }
 
-    pub(crate) fn insert_text_at(&mut self, col: usize, text: &str) {
-        if let Some(line) = self.lines.get_mut(self.cursor_row) {
+    pub(crate) fn insert_text_at(&mut self, row: usize, col: usize, text: &str) {
+        if let Some(line) = self.lines.get_mut(row) {
             line.insert_text(text, col);
+            self.cursor_row = row;
             self.cursor_col = col + text.chars().count();
             self.preferred_col = self.cursor_col; // Update preferred column after insertion
         }
@@ -114,6 +113,15 @@ impl TextArea {
             self.cursor_row += 1;
             self.cursor_col = 0;
             self.preferred_col = 0;
+        }
+    }
+
+    pub(crate) fn delete_chars_at(&mut self, row: usize, col: usize, len: usize) {
+        if let Some(line) = self.lines.get_mut(row) {
+            line.delete_text(col, len);
+            self.cursor_row = row;
+            self.cursor_col = col;
+            self.preferred_col = self.cursor_col; // Update preferred column after deletion
         }
     }
 

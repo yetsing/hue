@@ -2,6 +2,7 @@
 mod ctx;
 mod fileexplorer;
 mod textarea;
+mod undo;
 
 use core::panic;
 use ctx::Ctx;
@@ -96,6 +97,7 @@ struct State<'a> {
     text_area: textarea::TextArea,
     font_size: f32,
     section: Option<OwnedSection>,
+    undo_history: undo::UndoHistory,
 
     has_copy_newline: bool,
     copy_lines: Vec<String>,
@@ -620,27 +622,43 @@ impl State<'_> {
                         if !self.copy_lines.is_empty() {
                             let (cursor_row, cursor_col) = self.text_area.cursor_position();
                             if self.has_copy_newline {
-                                let lines = std::mem::take(&mut self.copy_lines);
-                                self.text_area.insert_lines_at(cursor_row + 1, lines);
+                                self.text_area.insert_lines_at(
+                                    cursor_row + 1,
+                                    std::mem::take(&mut self.copy_lines),
+                                );
                             } else {
-                                self.text_area
-                                    .insert_text_at(cursor_col + 1, &self.copy_lines[0]);
+                                self.text_area.insert_text_at(
+                                    cursor_row,
+                                    cursor_col + 1,
+                                    &self.copy_lines[0],
+                                );
                             }
                         }
                     }
                     "P" => {
                         if !self.copy_lines.is_empty() {
+                            let (cursor_row, cursor_col) = self.text_area.cursor_position();
                             if self.has_copy_newline {
                                 self.text_area.insert_lines_at(
-                                    self.text_area.cursor_position().0,
+                                    cursor_row,
                                     std::mem::take(&mut self.copy_lines),
                                 );
                             } else {
-                                let (_, cursor_col) = self.text_area.cursor_position();
-                                self.text_area
-                                    .insert_text_at(cursor_col, &self.copy_lines[0]);
+                                self.text_area.insert_text_at(
+                                    cursor_row,
+                                    cursor_col,
+                                    &self.copy_lines[0],
+                                );
                             }
                         }
+                    }
+                    "u" => {
+                        self.undo_history.undo(&mut self.text_area);
+                        self.text_area.clamp1_cursor();
+                    }
+                    "v" => {
+                        self.vim_state.mode = VimMode::Visual;
+                        println!("Switched to Visual mode");
                     }
                     "x" => {
                         self.text_area.delete_char_after_cursor(false);
@@ -661,10 +679,6 @@ impl State<'_> {
                         }
                         let (cursor_row, _) = self.text_area.cursor_position();
                         self.copy_lines(cursor_row, line_count);
-                    }
-                    "v" => {
-                        self.vim_state.mode = VimMode::Visual;
-                        println!("Switched to Visual mode");
                     }
                     ":" => {
                         self.vim_state.mode = VimMode::CommandLine;
@@ -770,10 +784,15 @@ impl State<'_> {
                     // vim 命令模式下，光标应该在当前行的最后一个字符上，而不是行尾之后
                     self.text_area.clamp1_cursor();
                     println!("Switched to Command mode");
+                    self.undo_history.start_new_block();
                     return;
                 }
+                let (cursor_row, cursor_col) = self.text_area.cursor_position();
                 self.text_area.insert_text_at_cursor(char.as_str());
                 self.cursor_blink_start = Instant::now();
+                let cmd =
+                    undo::InsertTextCmd::new(cursor_row, cursor_col, char.as_str().to_string());
+                self.undo_history.record(Box::new(cmd));
             }
             _ => (),
         }
@@ -1225,6 +1244,7 @@ fn main() -> Result<(), winit::error::EventLoopError> {
         text_area: textarea::TextArea::new(),
         font_size: 28.,
         section: None,
+        undo_history: undo::UndoHistory::new(),
 
         has_copy_newline: false,
         copy_lines: Vec::new(),

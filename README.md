@@ -12,6 +12,6 @@ text editor
 - [x] 实现 x X 命令
 - [x] 实现 g G 命令 (G nG gg)
 - [x] 实现 y Y p P 命令 (yy nyy nY p P)
-- [x] 实现 d D 命令 (dd ndd D d$)
+- [x] 实现 d D 命令 (dd ndd D d$ d^)
 - [x] 实现 $ ^ 光标跳转
 - [ ] 实现 u 命令：撤消上一步操作
