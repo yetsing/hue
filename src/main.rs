@@ -819,6 +819,11 @@ impl State<'_> {
             if blink_on { 1.0 } else { 0.0 }
         };
 
+        let line_count = self.text_area.line_count();
+        let line_digit_count = line_count.to_string().len();
+        let line_count_str = format!(" {} ", line_count);
+        let line_count_width = self.measure_text_width(&line_count_str);
+
         let ctx = self.ctx.as_ref().unwrap();
         let queue = &ctx.queue;
         let device = &ctx.device;
@@ -832,8 +837,28 @@ impl State<'_> {
             / self.scale_factor)
             .floor() as usize;
 
+        let mut line_num_text = String::new();
+        let line_num_start = self.scroll_row;
+        let line_num_end = line_count.min(self.scroll_row + self.view_rows + 1);
+        for i in line_num_start..line_num_end {
+            let line_num = format!(" {:>width$} \n", i + 1, width = line_digit_count);
+            line_num_text.push_str(&line_num);
+        }
+        let line_num_section = Section::default()
+            .add_text(
+                Text::new(&line_num_text)
+                    .with_scale(self.font_size)
+                    .with_color([0.5, 0.5, 0.5, 1.0]),
+            )
+            .with_bounds((
+                config.width as f32,
+                config.height as f32 * self.text_input_height_ratio,
+            ))
+            .with_layout(Layout::default().line_breaker(BuiltInLineBreaker::UnicodeLineBreaker))
+            .with_screen_position((0.0, 0.0));
+
         let text = self.text_area.string_with_row_offset(self.scroll_row);
-        let mut offset_x = 0.0;
+        let mut offset_x = line_count_width + 10.0;
         if cursor_x * self.scale_factor > config.width as f32 * 0.8 {
             offset_x = config.width as f32 * 0.8 - cursor_x * self.scale_factor;
         }
@@ -844,7 +869,7 @@ impl State<'_> {
                     .with_color([0.9, 0.5, 0.5, 1.0]),
             )
             .with_bounds((
-                (config.width * 2) as f32,
+                f32::MAX,
                 config.height as f32 * self.text_input_height_ratio,
             ))
             .with_layout(Layout::default().line_breaker(BuiltInLineBreaker::UnicodeLineBreaker))
@@ -928,14 +953,18 @@ impl State<'_> {
         queue.write_buffer(caret_vertex_buffer, 0, caret_vertex_bytes);
 
         if let Some(input_section) = input_section {
-            match brush.queue(device, queue, [section, status_section, input_section]) {
+            match brush.queue(
+                device,
+                queue,
+                [line_num_section, section, status_section, input_section],
+            ) {
                 Ok(_) => (),
                 Err(err) => {
                     panic!("{err}");
                 }
             };
         } else {
-            match brush.queue(device, queue, [section, status_section]) {
+            match brush.queue(device, queue, [line_num_section, section, status_section]) {
                 Ok(_) => (),
                 Err(err) => {
                     panic!("{err}");
