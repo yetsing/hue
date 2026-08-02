@@ -42,6 +42,60 @@ impl EditCommand for InsertTextCmd {
     }
 }
 
+pub struct InsertNewLineCmd {
+    row: usize,
+    col: usize,
+}
+
+impl InsertNewLineCmd {
+    pub fn new(row: usize, col: usize) -> Self {
+        InsertNewLineCmd { row, col }
+    }
+}
+
+impl EditCommand for InsertNewLineCmd {
+    fn execute(&mut self, text_area: &mut TextArea) {
+        text_area.insert_newline_at(self.row, self.col);
+    }
+    fn undo(&mut self, text_area: &mut TextArea) {
+        text_area.merge_lines_at(self.row);
+    }
+    fn try_merge(&mut self, _other: &dyn EditCommand) -> bool {
+        false // 插入新行的命令不与其他命令合并
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub struct DeleteTextCmd {
+    row: usize,
+    col: usize,
+    text: String, // 被删除的内容
+}
+
+impl DeleteTextCmd {
+    pub fn new(row: usize, col: usize, text: String) -> Self {
+        DeleteTextCmd { row, col, text }
+    }
+}
+
+impl EditCommand for DeleteTextCmd {
+    fn execute(&mut self, text_area: &mut TextArea) {
+        text_area.delete_chars_at(self.row, self.col, self.text.chars().count());
+    }
+    fn undo(&mut self, text_area: &mut TextArea) {
+        text_area.insert_text_at(self.row, self.col, &self.text);
+        text_area.goto_cursor(self.row, self.col);
+    }
+    fn try_merge(&mut self, _other: &dyn EditCommand) -> bool {
+        false // 删除命令不与其他命令合并
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 pub struct UndoHistory {
     // 每个 Vec<Command> 代表一个 Undo Block
     undo_stack: Vec<Vec<Box<dyn EditCommand>>>,

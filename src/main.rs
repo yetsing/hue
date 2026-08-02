@@ -609,14 +609,21 @@ impl State<'_> {
                         self.cursor_blink_start = Instant::now();
                     }
                     "o" => {
+                        let (cursor_row, _) = self.text_area.cursor_position();
+                        let cursor_end = self.text_area.line_length(cursor_row).unwrap_or(0);
                         self.text_area.new_line_below_cursor();
                         self.vim_state.mode = VimMode::Insert;
                         println!("Switched to Insert mode");
+                        let cmd = undo::InsertNewLineCmd::new(cursor_row, cursor_end);
+                        self.undo_history.record(Box::new(cmd));
                     }
                     "O" => {
+                        let (cursor_row, _) = self.text_area.cursor_position();
                         self.text_area.new_line_above_cursor();
                         self.vim_state.mode = VimMode::Insert;
                         println!("Switched to Insert mode");
+                        let cmd = undo::InsertNewLineCmd::new(cursor_row, 0);
+                        self.undo_history.record(Box::new(cmd));
                     }
                     "p" => {
                         if !self.copy_lines.is_empty() {
@@ -661,10 +668,29 @@ impl State<'_> {
                         println!("Switched to Visual mode");
                     }
                     "x" => {
+                        let (cursor_row, cursor_col) = self.text_area.cursor_position();
+                        let s = self.text_area.line_string_slice(cursor_row, cursor_col, 1);
                         self.text_area.delete_char_after_cursor(false);
+                        if let Some(s) = s {
+                            let cmd = undo::DeleteTextCmd::new(cursor_row, cursor_col, s);
+                            self.undo_history.record(Box::new(cmd));
+                            self.undo_history.start_new_block();
+                        }
                     }
                     "X" => {
+                        let (cursor_row, cursor_col) = self.text_area.cursor_position();
+                        let s = match cursor_col {
+                            0 => None,
+                            _ => self
+                                .text_area
+                                .line_string_slice(cursor_row, cursor_col - 1, 1),
+                        };
                         self.text_area.delete_char_before_cursor(false);
+                        if let Some(s) = s {
+                            let cmd = undo::DeleteTextCmd::new(cursor_row, cursor_col - 1, s);
+                            self.undo_history.record(Box::new(cmd));
+                            self.undo_history.start_new_block();
+                        }
                     }
                     "y" => {
                         self.vim_state.cmd_str.push_str(char.as_str());
@@ -753,10 +779,7 @@ impl State<'_> {
         match key {
             Key::Named(k) => match k {
                 NamedKey::Escape => {
-                    self.vim_state.mode = VimMode::Command;
-                    // vim 命令模式下，光标应该在当前行的最后一个字符上，而不是行尾之后
-                    self.text_area.clamp1_cursor();
-                    println!("Switched to Command mode");
+                    self.esc_insert_mode();
                 }
                 NamedKey::Delete => {
                     self.text_area.delete_char_after_cursor(true);
@@ -771,20 +794,19 @@ impl State<'_> {
                     self.cursor_blink_start = Instant::now();
                 }
                 NamedKey::Enter => {
+                    let (cursor_row, cursor_col) = self.text_area.cursor_position();
                     self.text_area.insert_newline_at_cursor();
                     self.cursor_blink_start = Instant::now();
                     self.scroll_row();
+                    let cmd = undo::InsertNewLineCmd::new(cursor_row, cursor_col);
+                    self.undo_history.record(Box::new(cmd));
                 }
                 _ => {}
             },
             Key::Character(char) if !self.is_ime_active => {
                 // Handle Ctrl+[ to switch to Command mode （终端里面 Ctrl + [ 对应 Esc ）
                 if self.modifier.control_key() && char.as_str() == "[" {
-                    self.vim_state.mode = VimMode::Command;
-                    // vim 命令模式下，光标应该在当前行的最后一个字符上，而不是行尾之后
-                    self.text_area.clamp1_cursor();
-                    println!("Switched to Command mode");
-                    self.undo_history.start_new_block();
+                    self.esc_insert_mode();
                     return;
                 }
                 let (cursor_row, cursor_col) = self.text_area.cursor_position();
@@ -802,6 +824,14 @@ impl State<'_> {
         if self.vim_state.mode != VimMode::Visual {
             return;
         }
+    }
+
+    fn esc_insert_mode(&mut self) {
+        self.vim_state.mode = VimMode::Command;
+        // vim 命令模式下，光标应该在当前行的最后一个字符上，而不是行尾之后
+        self.text_area.clamp1_cursor();
+        self.undo_history.start_new_block();
+        println!("Switched to Command mode");
     }
 
     fn redraw(&mut self) {

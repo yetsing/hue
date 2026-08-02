@@ -103,17 +103,18 @@ impl TextArea {
         }
     }
 
-    pub(crate) fn insert_newline_at_cursor(&mut self) {
-        if let Some(line) = self.lines.get_mut(self.cursor_row) {
-            let remaining_text = line
-                .text
-                .split_off(char_to_byte_index(&line.text, self.cursor_col));
-            self.lines
-                .insert(self.cursor_row + 1, Line::new(remaining_text));
-            self.cursor_row += 1;
+    pub(crate) fn insert_newline_at(&mut self, row: usize, col: usize) {
+        if let Some(line) = self.lines.get_mut(row) {
+            let remaining_text = line.text.split_off(char_to_byte_index(&line.text, col));
+            self.lines.insert(row + 1, Line::new(remaining_text));
+            self.cursor_row = row + 1;
             self.cursor_col = 0;
-            self.preferred_col = 0;
+            self.preferred_col = 0; // Update preferred column after inserting a new line
         }
+    }
+
+    pub(crate) fn insert_newline_at_cursor(&mut self) {
+        self.insert_newline_at(self.cursor_row, self.cursor_col);
     }
 
     pub(crate) fn delete_chars_at(&mut self, row: usize, col: usize, len: usize) {
@@ -230,6 +231,17 @@ impl TextArea {
         }
     }
 
+    pub(crate) fn merge_lines_at(&mut self, row: usize) {
+        if row + 1 < self.lines.len() {
+            let next_line = self.lines.remove(row + 1);
+            if let Some(line) = self.lines.get_mut(row) {
+                line.text.push_str(&next_line.text);
+            }
+            self.cursor_row = row;
+            self.preferred_col = self.cursor_col; // Update preferred column after merging lines
+        }
+    }
+
     pub(crate) fn append_line(&mut self, text: &str) {
         self.lines.push(Line::new(text.to_string()));
     }
@@ -284,12 +296,29 @@ impl TextArea {
             .collect::<Vec<String>>()
     }
 
+    pub(crate) fn line_string_slice(
+        &self,
+        row: usize,
+        start_col: usize,
+        count: usize,
+    ) -> Option<String> {
+        self.lines.get(row).map(|line| {
+            let line_len = line.length();
+            let start_col = usize::min(start_col, line_len);
+            line.text.chars().skip(start_col).take(count).collect()
+        })
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.lines.len() == 1 && self.lines[0].length() == 0
     }
 
     pub(crate) fn line_count(&self) -> usize {
         self.lines.len()
+    }
+
+    pub(crate) fn line_length(&self, row: usize) -> Option<usize> {
+        self.lines.get(row).map(|line| line.length())
     }
 }
 
