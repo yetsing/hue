@@ -8,12 +8,12 @@ use core::panic;
 use ctx::Ctx;
 use glyph_brush::OwnedSection;
 use glyph_brush::ab_glyph::FontRef;
-use std::fmt;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::{fmt, println};
 use wgpu_text::glyph_brush::{BuiltInLineBreaker, Layout, Section, Text};
 use wgpu_text::{BrushBuilder, TextBrush};
 use winit::application::ApplicationHandler;
@@ -614,7 +614,7 @@ impl State<'_> {
                         self.text_area.new_line_below_cursor();
                         self.vim_state.mode = VimMode::Insert;
                         println!("Switched to Insert mode");
-                        let cmd = undo::InsertNewLineCmd::new(cursor_row, cursor_end);
+                        let cmd = undo::InsertNewlineCmd::new(cursor_row, cursor_end);
                         self.undo_history.record(Box::new(cmd));
                     }
                     "O" => {
@@ -622,7 +622,7 @@ impl State<'_> {
                         self.text_area.new_line_above_cursor();
                         self.vim_state.mode = VimMode::Insert;
                         println!("Switched to Insert mode");
-                        let cmd = undo::InsertNewLineCmd::new(cursor_row, 0);
+                        let cmd = undo::InsertNewlineCmd::new(cursor_row, 0);
                         self.undo_history.record(Box::new(cmd));
                     }
                     "p" => {
@@ -782,12 +782,48 @@ impl State<'_> {
                     self.esc_insert_mode();
                 }
                 NamedKey::Delete => {
+                    let (cursor_row, cursor_col) = self.text_area.cursor_position();
+                    let line_length = self.text_area.line_length(cursor_row).unwrap_or(0);
+                    let line_count = self.text_area.line_count();
+                    let s = if cursor_col >= line_length {
+                        None
+                    } else {
+                        self.text_area.line_string_slice(cursor_row, cursor_col, 1)
+                    };
                     self.text_area.delete_char_after_cursor(true);
                     self.cursor_blink_start = Instant::now();
+                    if let Some(s) = s {
+                        let cmd = undo::DeleteText1Cmd::new(cursor_row, cursor_col, s);
+                        self.undo_history.record(Box::new(cmd));
+                    } else if cursor_col >= line_length && cursor_row < line_count - 1 {
+                        // Handle delete at the end of a line (merge lines)
+                        let cmd = undo::DeleteNewlineCmd::new(cursor_row, cursor_col);
+                        self.undo_history.record(Box::new(cmd));
+                    }
                 }
                 NamedKey::Backspace => {
+                    let (cursor_row, cursor_col) = self.text_area.cursor_position();
+                    let s = match cursor_col {
+                        0 => None,
+                        _ => self
+                            .text_area
+                            .line_string_slice(cursor_row, cursor_col - 1, 1),
+                    };
+                    let previous_line_length = if cursor_row == 0 {
+                        0
+                    } else {
+                        self.text_area.line_length(cursor_row - 1).unwrap_or(0)
+                    };
                     self.text_area.delete_char_before_cursor(true);
                     self.cursor_blink_start = Instant::now();
+                    if let Some(s) = s {
+                        let cmd = undo::DeleteText1Cmd::new(cursor_row, cursor_col - 1, s);
+                        self.undo_history.record(Box::new(cmd));
+                    } else if cursor_col == 0 && cursor_row > 0 {
+                        // Handle backspace at the beginning of a line (merge lines)
+                        let cmd = undo::DeleteNewlineCmd::new(cursor_row - 1, previous_line_length);
+                        self.undo_history.record(Box::new(cmd));
+                    }
                 }
                 NamedKey::Space => {
                     self.text_area.insert_text_at_cursor(" ");
@@ -798,7 +834,7 @@ impl State<'_> {
                     self.text_area.insert_newline_at_cursor();
                     self.cursor_blink_start = Instant::now();
                     self.scroll_row();
-                    let cmd = undo::InsertNewLineCmd::new(cursor_row, cursor_col);
+                    let cmd = undo::InsertNewlineCmd::new(cursor_row, cursor_col);
                     self.undo_history.record(Box::new(cmd));
                 }
                 _ => {}

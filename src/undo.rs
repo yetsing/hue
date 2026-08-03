@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use crate::textarea::TextArea;
 use std::any::Any;
 
@@ -42,18 +44,18 @@ impl EditCommand for InsertTextCmd {
     }
 }
 
-pub struct InsertNewLineCmd {
+pub struct InsertNewlineCmd {
     row: usize,
     col: usize,
 }
 
-impl InsertNewLineCmd {
+impl InsertNewlineCmd {
     pub fn new(row: usize, col: usize) -> Self {
-        InsertNewLineCmd { row, col }
+        InsertNewlineCmd { row, col }
     }
 }
 
-impl EditCommand for InsertNewLineCmd {
+impl EditCommand for InsertNewlineCmd {
     fn execute(&mut self, text_area: &mut TextArea) {
         text_area.insert_newline_at(self.row, self.col);
     }
@@ -62,6 +64,32 @@ impl EditCommand for InsertNewLineCmd {
     }
     fn try_merge(&mut self, _other: &dyn EditCommand) -> bool {
         false // 插入新行的命令不与其他命令合并
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub struct DeleteNewlineCmd {
+    row: usize,
+    col: usize,
+}
+
+impl DeleteNewlineCmd {
+    pub fn new(row: usize, col: usize) -> Self {
+        DeleteNewlineCmd { row, col }
+    }
+}
+
+impl EditCommand for DeleteNewlineCmd {
+    fn execute(&mut self, text_area: &mut TextArea) {
+        text_area.merge_lines_at(self.row);
+    }
+    fn undo(&mut self, text_area: &mut TextArea) {
+        text_area.insert_newline_at(self.row, self.col);
+    }
+    fn try_merge(&mut self, _other: &dyn EditCommand) -> bool {
+        false // 删除新行的命令不与其他命令合并
     }
     fn as_any(&self) -> &dyn Any {
         self
@@ -90,6 +118,47 @@ impl EditCommand for DeleteTextCmd {
     }
     fn try_merge(&mut self, _other: &dyn EditCommand) -> bool {
         false // 删除命令不与其他命令合并
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+// 在 Insert 模式下删除文本的命令，和 DeleteTextCmd 类似，但用于 Insert 模式下的删除操作
+pub struct DeleteText1Cmd {
+    row: usize,
+    col: usize,
+    text: String, // 被删除的内容
+}
+
+impl DeleteText1Cmd {
+    pub fn new(row: usize, col: usize, text: String) -> Self {
+        DeleteText1Cmd { row, col, text }
+    }
+}
+
+impl EditCommand for DeleteText1Cmd {
+    fn execute(&mut self, text_area: &mut TextArea) {
+        text_area.delete_chars_at(self.row, self.col, self.text.chars().count());
+    }
+    fn undo(&mut self, text_area: &mut TextArea) {
+        text_area.insert_text_at(self.row, self.col, &self.text);
+        text_area.goto_cursor(self.row, self.col);
+    }
+    fn try_merge(&mut self, other: &dyn EditCommand) -> bool {
+        let other = other.as_any().downcast_ref::<DeleteText1Cmd>();
+        if let Some(other) = other {
+            if self.row == other.row && self.col + self.text.chars().count() == other.col {
+                self.text.push_str(&other.text);
+                return true;
+            }
+            if self.row == other.row && self.col == other.col + other.text.chars().count() {
+                self.text = format!("{}{}", other.text, self.text);
+                self.col = other.col;
+                return true;
+            }
+        }
+        false
     }
     fn as_any(&self) -> &dyn Any {
         self
