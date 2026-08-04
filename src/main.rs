@@ -581,6 +581,10 @@ impl State<'_> {
                         self.text_area.move_left_cursor();
                         self.cursor_blink_start = Instant::now();
                     }
+                    "H" => {
+                        let (_, cursor_col) = self.text_area.cursor_position();
+                        self.text_area.goto_cursor(self.scroll_row, cursor_col);
+                    }
                     "i" => {
                         self.vim_state.mode = VimMode::Insert;
                         println!("Switched to Insert mode");
@@ -607,6 +611,17 @@ impl State<'_> {
                     "l" => {
                         self.text_area.move_right1_cursor();
                         self.cursor_blink_start = Instant::now();
+                    }
+                    "L" => {
+                        let (_, cursor_col) = self.text_area.cursor_position();
+                        self.text_area
+                            .goto_cursor(self.scroll_row + self.view_rows - 1, cursor_col);
+                    }
+                    "M" => {
+                        let (_, cursor_col) = self.text_area.cursor_position();
+                        let mut row = self.scroll_row + self.view_rows / 2;
+                        row = row.min(self.text_area.line_count() / 2);
+                        self.text_area.goto_cursor(row, cursor_col);
                     }
                     "o" => {
                         let (cursor_row, _) = self.text_area.cursor_position();
@@ -732,6 +747,12 @@ impl State<'_> {
                     let input_text = text_input.string();
                     let cmd = &input_text[1..]; // 移除前面的冒号
                     match cmd {
+                        ",d" => {
+                            self.vim_state.mode = VimMode::Directory;
+                            self.text_input = None;
+                            self.update_fileinfos();
+                            return;
+                        }
                         "w" => {
                             self.save_file();
                         }
@@ -888,7 +909,7 @@ impl State<'_> {
         let line_count = self.text_area.line_count();
         let line_digit_count = line_count.to_string().len();
         let line_count_str = format!(" {} ", line_count);
-        let line_count_width = self.measure_text_width(&line_count_str);
+        let line_count_width = self.measure_text_width(&line_count_str) * self.scale_factor;
 
         let ctx = self.ctx.as_ref().unwrap();
         let queue = &ctx.queue;
@@ -924,9 +945,9 @@ impl State<'_> {
             .with_screen_position((0.0, 0.0));
 
         let text = self.text_area.string_with_row_offset(self.scroll_row);
-        let mut offset_x = line_count_width + 10.0;
+        let mut offset_x = line_count_width;
         if cursor_x * self.scale_factor > config.width as f32 * 0.8 {
-            offset_x = config.width as f32 * 0.8 - cursor_x * self.scale_factor;
+            offset_x = line_count_width + config.width as f32 * 0.8 - cursor_x * self.scale_factor;
         }
         let section = Section::default()
             .add_text(
@@ -1022,7 +1043,7 @@ impl State<'_> {
             match brush.queue(
                 device,
                 queue,
-                [line_num_section, section, status_section, input_section],
+                [section, status_section, line_num_section, input_section],
             ) {
                 Ok(_) => (),
                 Err(err) => {
@@ -1030,7 +1051,7 @@ impl State<'_> {
                 }
             };
         } else {
-            match brush.queue(device, queue, [line_num_section, section, status_section]) {
+            match brush.queue(device, queue, [section, status_section, line_num_section]) {
                 Ok(_) => (),
                 Err(err) => {
                     panic!("{err}");
