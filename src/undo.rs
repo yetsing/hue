@@ -165,6 +165,60 @@ impl EditCommand for DeleteText1Cmd {
     }
 }
 
+pub struct InsertLinesCmd {
+    row: usize,
+    col: usize,
+    lines: Vec<String>,
+}
+
+impl InsertLinesCmd {
+    pub fn new(row: usize, col: usize, lines: Vec<String>) -> Self {
+        InsertLinesCmd { row, col, lines }
+    }
+}
+
+impl EditCommand for InsertLinesCmd {
+    fn execute(&mut self, text_area: &mut TextArea) {
+        text_area.insert_lines_at(self.row, self.lines.clone());
+    }
+    fn undo(&mut self, text_area: &mut TextArea) {
+        text_area.delete_lines_at(self.row, self.lines.len());
+    }
+    fn try_merge(&mut self, _other: &dyn EditCommand) -> bool {
+        false
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+pub struct DeleteLinesCmd {
+    row: usize,
+    col: usize,
+    lines: Vec<String>,
+}
+
+impl DeleteLinesCmd {
+    pub fn new(row: usize, col: usize, lines: Vec<String>) -> Self {
+        DeleteLinesCmd { row, col, lines }
+    }
+}
+
+impl EditCommand for DeleteLinesCmd {
+    fn execute(&mut self, text_area: &mut TextArea) {
+        text_area.delete_lines_at(self.row, self.lines.len());
+    }
+    fn undo(&mut self, text_area: &mut TextArea) {
+        text_area.insert_lines_at(self.row, self.lines.clone());
+    }
+    fn try_merge(&mut self, _other: &dyn EditCommand) -> bool {
+        false
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 pub struct UndoHistory {
     // 每个 Vec<Command> 代表一个 Undo Block
     undo_stack: Vec<Vec<Box<dyn EditCommand>>>,

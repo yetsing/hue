@@ -504,7 +504,15 @@ impl State<'_> {
                                 line_count = self.vim_state.num_str.parse::<usize>().unwrap_or(1);
                                 self.vim_state.num_str.clear();
                             }
+                            self.copy_lines(self.text_area.cursor_position().0, line_count);
                             self.text_area.delete_lines_at_cursor(line_count);
+                            let cmd = undo::DeleteLinesCmd::new(
+                                self.text_area.cursor_position().0,
+                                0,
+                                self.copy_lines.clone(),
+                            );
+                            self.undo_history.record(Box::new(cmd));
+                            self.undo_history.start_new_block();
                         }
                         "d$" => {
                             self.vim_state.cmd_str.clear();
@@ -644,10 +652,14 @@ impl State<'_> {
                         if !self.copy_lines.is_empty() {
                             let (cursor_row, cursor_col) = self.text_area.cursor_position();
                             if self.has_copy_newline {
+                                let lines = self.copy_lines.clone();
                                 self.text_area.insert_lines_at(
                                     cursor_row + 1,
                                     std::mem::take(&mut self.copy_lines),
                                 );
+                                let cmd = undo::InsertLinesCmd::new(cursor_row + 1, 0, lines);
+                                self.undo_history.record(Box::new(cmd));
+                                self.undo_history.start_new_block();
                             } else {
                                 self.text_area.insert_text_at(
                                     cursor_row,
@@ -661,10 +673,14 @@ impl State<'_> {
                         if !self.copy_lines.is_empty() {
                             let (cursor_row, cursor_col) = self.text_area.cursor_position();
                             if self.has_copy_newline {
+                                let lines = self.copy_lines.clone();
                                 self.text_area.insert_lines_at(
                                     cursor_row,
                                     std::mem::take(&mut self.copy_lines),
                                 );
+                                let cmd = undo::InsertLinesCmd::new(cursor_row, 0, lines);
+                                self.undo_history.record(Box::new(cmd));
+                                self.undo_history.start_new_block();
                             } else {
                                 self.text_area.insert_text_at(
                                     cursor_row,

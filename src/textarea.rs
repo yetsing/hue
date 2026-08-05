@@ -173,23 +173,21 @@ impl TextArea {
         }
     }
 
-    pub(crate) fn delete_lines_at_cursor(&mut self, n: usize) {
-        if n >= self.lines.len() {
-            self.lines.clear();
-            self.lines.push(Line::new(String::new()));
-            self.cursor_row = 0;
-            self.cursor_col = 0;
-            self.preferred_col = 0; // Update preferred column after deletion
+    pub(crate) fn delete_lines_at(&mut self, row: usize, count: usize) {
+        if count == 0 || row >= self.lines.len() {
             return;
         }
-        if self.cursor_row < self.lines.len() {
-            let actual_n = usize::min(n, self.lines.len() - self.cursor_row);
-            for _ in 0..actual_n {
-                self.lines.remove(self.cursor_row);
-            }
+        if row + count >= self.lines.len() {
+            self.lines.truncate(row);
             self.clamp1_cursor();
-            self.preferred_col = self.cursor_col; // Update preferred column after deletion
+            return;
         }
+        let actual_count = usize::min(count, self.lines.len() - row);
+        self.lines.drain(row..row + actual_count);
+    }
+
+    pub(crate) fn delete_lines_at_cursor(&mut self, n: usize) {
+        self.delete_lines_at(self.cursor_row, n);
     }
 
     pub(crate) fn delete_to_start_of_line(&mut self) {
