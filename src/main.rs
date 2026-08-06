@@ -998,13 +998,29 @@ impl State<'_> {
             / self.scale_factor)
             .floor() as usize;
 
+        // black_text black_section 利用黑色方块字符 █ 来绘制行号区域的背景色，这样文本左移时，文本不会和行号混在一起
+        let mut black_text = String::new();
         let mut line_num_text = String::new();
         let line_num_start = self.scroll_row;
         let line_num_end = line_count.min(self.scroll_row + self.view_rows + 1);
         for i in line_num_start..line_num_end {
             let line_num = format!(" {:>width$} \n", i + 1, width = line_digit_count);
             line_num_text.push_str(&line_num);
+            let bs = format!("{}\n", "█".repeat(line_digit_count + 2));
+            black_text.push_str(&bs);
         }
+        let black_section = Section::default()
+            .add_text(
+                Text::new(&black_text)
+                    .with_scale(self.font_size)
+                    .with_color([0.0, 0.0, 0.0, 1.0]),
+            )
+            .with_bounds((
+                config.width as f32,
+                config.height as f32 * self.text_input_height_ratio,
+            ))
+            .with_layout(Layout::default().line_breaker(BuiltInLineBreaker::UnicodeLineBreaker))
+            .with_screen_position((0.0, 0.0));
         let line_num_section = Section::default()
             .add_text(
                 Text::new(&line_num_text)
@@ -1117,7 +1133,13 @@ impl State<'_> {
             match brush.queue(
                 device,
                 queue,
-                [section, status_section, line_num_section, input_section],
+                [
+                    section,
+                    status_section,
+                    black_section,
+                    line_num_section,
+                    input_section,
+                ],
             ) {
                 Ok(_) => (),
                 Err(err) => {
@@ -1125,7 +1147,11 @@ impl State<'_> {
                 }
             };
         } else {
-            match brush.queue(device, queue, [section, status_section, line_num_section]) {
+            match brush.queue(
+                device,
+                queue,
+                [section, status_section, black_section, line_num_section],
+            ) {
                 Ok(_) => (),
                 Err(err) => {
                     panic!("{err}");
