@@ -846,6 +846,8 @@ impl State<'_> {
                 NamedKey::Escape => {
                     self.text_input = None;
                     self.cursor_blink_start = Instant::now();
+                    self.vim_state.mode = VimMode::Command;
+                    println!("Switched to Command mode");
                 }
                 NamedKey::Backspace => {
                     text_input.delete_char_before_cursor(true);
@@ -853,6 +855,7 @@ impl State<'_> {
                     if text_input.is_empty() {
                         self.text_input = None;
                         self.vim_state.mode = VimMode::Command;
+                        println!("Switched to Command mode");
                     }
                 }
                 _ => {}
