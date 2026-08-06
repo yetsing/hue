@@ -366,6 +366,11 @@ impl State<'_> {
         self.has_copy_newline = true;
     }
 
+    fn copy_text(&mut self, text: String) {
+        self.copy_lines = vec![text];
+        self.has_copy_newline = false;
+    }
+
     fn handle_key_in_directory_mode(&mut self, key: Key) {
         if self.vim_state.mode != VimMode::Directory {
             return;
@@ -516,11 +521,35 @@ impl State<'_> {
                         }
                         "d$" => {
                             self.vim_state.cmd_str.clear();
+                            let (cursor_row, cursor_col) = self.text_area.cursor_position();
+                            let s = self.text_area.line_string_slice(
+                                cursor_row,
+                                cursor_col,
+                                usize::MAX,
+                            );
                             self.text_area.delete_to_end_of_line();
+                            if let Some(s) = s
+                                && !s.is_empty()
+                            {
+                                self.copy_text(s.clone());
+                                let cmd = undo::DeleteTextCmd::new(cursor_row, cursor_col, s);
+                                self.undo_history.record(Box::new(cmd));
+                                self.undo_history.start_new_block();
+                            }
                         }
                         "d^" => {
                             self.vim_state.cmd_str.clear();
+                            let (cursor_row, cursor_col) = self.text_area.cursor_position();
+                            let s = self.text_area.line_string_slice(cursor_row, 0, cursor_col);
                             self.text_area.delete_to_start_of_line();
+                            if let Some(s) = s
+                                && !s.is_empty()
+                            {
+                                self.copy_text(s.clone());
+                                let cmd = undo::DeleteTextCmd::new(cursor_row, 0, s);
+                                self.undo_history.record(Box::new(cmd));
+                                self.undo_history.start_new_block();
+                            }
                         }
                         "gg" => {
                             self.vim_state.cmd_str.clear();
@@ -567,7 +596,19 @@ impl State<'_> {
                         self.vim_state.cmd_str.push_str(char.as_str());
                     }
                     "D" => {
+                        let (cursor_row, cursor_col) = self.text_area.cursor_position();
+                        let s =
+                            self.text_area
+                                .line_string_slice(cursor_row, cursor_col, usize::MAX);
                         self.text_area.delete_to_end_of_line();
+                        if let Some(s) = s
+                            && !s.is_empty()
+                        {
+                            self.copy_text(s.clone());
+                            let cmd = undo::DeleteTextCmd::new(cursor_row, cursor_col, s);
+                            self.undo_history.record(Box::new(cmd));
+                            self.undo_history.start_new_block();
+                        }
                     }
                     "g" => {
                         self.vim_state.cmd_str.push_str(char.as_str());
@@ -661,11 +702,18 @@ impl State<'_> {
                                 self.undo_history.record(Box::new(cmd));
                                 self.undo_history.start_new_block();
                             } else {
-                                self.text_area.insert_text_at(
+                                let line_length =
+                                    self.text_area.line_length(cursor_row).unwrap_or(0);
+                                let col = (cursor_col + 1).min(line_length);
+                                self.text_area
+                                    .insert_text_at(cursor_row, col, &self.copy_lines[0]);
+                                let cmd = undo::InsertTextCmd::new(
                                     cursor_row,
-                                    cursor_col + 1,
-                                    &self.copy_lines[0],
+                                    col,
+                                    self.copy_lines[0].clone(),
                                 );
+                                self.undo_history.record(Box::new(cmd));
+                                self.undo_history.start_new_block();
                             }
                         }
                     }
@@ -687,6 +735,13 @@ impl State<'_> {
                                     cursor_col,
                                     &self.copy_lines[0],
                                 );
+                                let cmd = undo::InsertTextCmd::new(
+                                    cursor_row,
+                                    cursor_col,
+                                    self.copy_lines[0].clone(),
+                                );
+                                self.undo_history.record(Box::new(cmd));
+                                self.undo_history.start_new_block();
                             }
                         }
                     }
